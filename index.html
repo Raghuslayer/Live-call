@@ -288,7 +288,6 @@
         firebase.initializeApp(firebaseConfig);
         const auth = firebase.auth();
         const db = firebase.firestore();
-        // Enable Firestore debug logging
         firebase.firestore.setLogLevel('debug');
 
         const authContainer = document.getElementById('authContainer');
@@ -320,7 +319,6 @@
         let callerCallId;
         let isCaller = false;
         let callDoc;
-        let mediaInitialized = false;
         let callListeners = [];
 
         function showSection(section) {
@@ -409,6 +407,7 @@
                 resetCallState();
                 if (localStream) {
                     localStream.getTracks().forEach(track => track.stop());
+                    localStream = null;
                 }
                 showSection(authContainer);
                 authStatus.textContent = 'Signed out successfully';
@@ -419,6 +418,7 @@
         }
 
         function resetCallState() {
+            console.log('Resetting call state');
             if (peerConnection) {
                 peerConnection.close();
                 peerConnection = null;
@@ -427,9 +427,16 @@
                 remoteStream.getTracks().forEach(track => track.stop());
                 remoteStream = null;
             }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
             remoteVideo.srcObject = null;
+            localVideo.srcObject = null;
             remotePlaceholder.style.display = 'block';
+            localPlaceholder.style.display = 'block';
             remoteVideo.style.display = 'none';
+            localVideo.style.display = 'none';
             endCallBtn.style.display = 'none';
             incomingCallAlert.style.display = 'none';
             targetCallId = null;
@@ -438,8 +445,27 @@
             callDoc = null;
             callListeners.forEach(unsubscribe => unsubscribe());
             callListeners = [];
-            mediaInitialized = false;
             callStatus.textContent = '';
+        }
+
+        async function initMediaStream() {
+            try {
+                console.log('Initializing media stream');
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    localStream = null;
+                }
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                localVideo.srcObject = localStream;
+                localPlaceholder.style.display = 'none';
+                localVideo.style.display = 'block';
+                console.log('Media stream initialized:', localStream.getTracks());
+                return true;
+            } catch (error) {
+                console.error('Error initializing media stream:', error);
+                callStatus.textContent = 'Could not access camera/microphone. Please grant permissions.';
+                return false;
+            }
         }
 
         async function initCallSection() {
@@ -452,7 +478,6 @@
                     lastSeen: firebase.firestore.FieldValue.serverTimestamp()
                 }, { merge: true });
 
-                // Clean up old call documents
                 await cleanupOldCalls();
 
                 const callListener = db.collection('users').doc(auth.currentUser.uid).collection('calls').onSnapshot(snapshot => {
@@ -470,17 +495,9 @@
                 });
                 callListeners.push(callListener);
 
-                try {
-                    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                    localVideo.srcObject = localStream;
-                    localPlaceholder.style.display = 'none';
-                    localVideo.style.display = 'block';
-                    mediaInitialized = true;
-                    console.log('Media initialized successfully');
-                } catch (error) {
-                    console.error('Error accessing media devices:', error);
-                    callStatus.textContent = 'Could not access camera/microphone. Please grant permissions and refresh.';
-                    mediaInitialized = false;
+                const mediaSuccess = await initMediaStream();
+                if (!mediaSuccess) {
+                    callStatus.textContent = 'Media initialization failed. Please grant permissions and refresh.';
                 }
             } catch (error) {
                 console.error('Error initializing call section:', error);
@@ -493,11 +510,8 @@
                 const user = auth.currentUser;
                 const calls = await db.collection('users').doc(user.uid).collection('calls').get();
                 for (const doc of calls.docs) {
-                    const data = doc.data();
-                    if (data.status !== 'calling') {
-                        await doc.ref.delete();
-                        console.log('Deleted old call document:', doc.id);
-                    }
+                    await doc.ref.delete();
+                    console.log('Deleted call document:', doc.id);
                 }
             } catch (error) {
                 console.error('Error cleaning up old calls:', error);
@@ -506,29 +520,39 @@
 
         function handleIncomingCall(callData, callDocId) {
             console.log('Handling incoming call:', callData, 'Doc ID:', callDocId);
-            if (callData.status === 'calling' && incomingCallAlert.style.display !== 'block') {
+            if (callData.status === 'calling') {
+                const now = new Date();
+                const callTime = callData.timestamp?.toDate();
+                if (callTime && (now - callTime > 60000)) {
+                    console.log('Ignoring stale call:', callDocId);
+                    db.collection('users').doc(auth.currentUser.uid).collection('calls').doc(callDocId).delete();
+                    return;
+                }
                 callerCallId = callData.caller;
                 callerIdSpan.textContent = callerCallId;
                 incomingCallAlert.style.display = 'block';
                 callStatus.textContent = `Incoming call from ${callerCallId}`;
                 incomingCallAlert.dataset.callDocId = callDocId;
-            } else if (callData.status !== 'calling') {
+            } else {
                 incomingCallAlert.style.display = 'none';
-                callStatus.textContent = callData.status === 'ended' ? 'Call ended by the other party' : 
-                                        callData.status === 'rejected' ? 'Call was rejected' : 
-                                        callData.status === 'answered' ? 'Call connected' : 
-                                        callData.status === 'completed' ? 'Call completed' : '';
-                if (callStatus.textContent) {
-                    setTimeout(() => callStatus.textContent = '', 3000);
+                if (callData.status === 'ended' && (peerConnection || localStream)) {
+                    console.log('Call ended by other party, resetting state');
+                    endCall();
+                } else {
+                    callStatus.textContent = callData.status === 'rejected' ? 'Call was rejected' : 
+                                            callData.status === 'answered' ? 'Call connected' : 
+                                            callData.status === 'completed' ? 'Call completed' : '';
+                    if (callStatus.textContent) {
+                        setTimeout(() => callStatus.textContent = '', 3000);
+                    }
                 }
+                db.collection('users').doc(auth.currentUser.uid).collection('calls').doc(callDocId).delete();
             }
         }
 
         async function startCall() {
-            if (!mediaInitialized) {
-                callStatus.textContent = 'Camera/microphone not initialized. Please refresh and allow permissions.';
-                return;
-            }
+            const mediaSuccess = await initMediaStream();
+            if (!mediaSuccess) return;
 
             resetCallState();
 
@@ -568,8 +592,7 @@
                     };
                     console.log('Attempting to write call notification:', callData);
                     await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).set(callData);
-                    console.log(`Call notification written successfully to target user: ${targetUid}, callId: ${callDoc.id}`);
-                    // Wait briefly to ensure Firestore sync
+                    console.log(`Call notification written to target user: ${targetUid}, callId: ${callDoc.id}`);
                     await new Promise(resolve => setTimeout(resolve, 500));
                 } catch (error) {
                     console.error('Failed to notify target user:', error);
@@ -599,6 +622,10 @@
                         callStatus.textContent = `Connected with ${targetCallId}`;
                         endCallBtn.style.display = 'block';
                     }
+                    if (data?.status === 'ended') {
+                        console.log('Call ended by other party');
+                        endCall();
+                    }
                 }, error => {
                     console.error('Call snapshot listener error:', error);
                 });
@@ -609,7 +636,9 @@
                         if (change.type === 'added') {
                             console.log('Received answer candidate:', change.doc.data());
                             const candidate = new RTCIceCandidate(change.doc.data());
-                            await peerConnection.addIceCandidate(candidate);
+                            await peerConnection.addIceCandidate(candidate).catch(error => {
+                                console.error('Error adding ICE candidate:', error);
+                            });
                         }
                     });
                 }, error => {
@@ -623,6 +652,13 @@
                         await offerCandidates.add(event.candidate.toJSON());
                     }
                 };
+
+                setTimeout(() => {
+                    if (!peerConnection.currentRemoteDescription) {
+                        callStatus.textContent = 'Call timed out';
+                        endCall();
+                    }
+                }, 30000);
             } catch (error) {
                 console.error('Error starting call:', error);
                 callStatus.textContent = 'Error starting call: ' + error.message;
@@ -630,8 +666,8 @@
         }
 
         async function acceptCall() {
-            if (!mediaInitialized) {
-                callStatus.textContent = 'Camera/microphone not initialized. Please refresh and allow permissions.';
+            const mediaSuccess = await initMediaStream();
+            if (!mediaSuccess) {
                 incomingCallAlert.style.display = 'none';
                 return;
             }
@@ -654,6 +690,7 @@
                 if (!callDocSnap.exists) {
                     console.error('Call document not found:', callDocId);
                     callStatus.textContent = 'Call no longer exists';
+                    await callDocRef.delete();
                     return;
                 }
 
@@ -668,7 +705,7 @@
                     status: 'answered',
                     answeredAt: firebase.firestore.FieldValue.serverTimestamp()
                 });
-                console.log('Call marked as answered in user’s calls collection');
+                console.log('Call marked as answered');
 
                 await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -694,11 +731,12 @@
                         callStatus.textContent = `Connected with ${callerCallId}`;
                         endCallBtn.style.display = 'block';
 
-                        await callDocRef.update({
-                            status: 'completed',
-                            completedAt: firebase.firestore.FieldValue.serverTimestamp()
-                        });
-                        console.log('Call notification marked as completed');
+                        await callDocRef.delete();
+                        console.log('Call notification deleted after connection');
+                    }
+                    if (data?.status === 'ended') {
+                        console.log('Call ended by other party');
+                        endCall();
                     }
                 }, error => {
                     console.error('Call snapshot listener error:', error);
@@ -710,7 +748,9 @@
                         if (change.type === 'added') {
                             console.log('Received offer candidate:', change.doc.data());
                             const candidate = new RTCIceCandidate(change.doc.data());
-                            await peerConnection.addIceCandidate(candidate);
+                            await peerConnection.addIceCandidate(candidate).catch(error => {
+                                console.error('Error adding ICE candidate:', error);
+                            });
                         }
                     });
                 }, error => {
@@ -741,23 +781,18 @@
                 console.log('Rejecting call with doc ID:', callDocId);
 
                 const callDocRef = db.collection('users').doc(user.uid).collection('calls').doc(callDocId);
-                await callDocRef.update({
-                    status: 'rejected',
-                    rejectedAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
-                console.log('Call marked as rejected');
+                await callDocRef.delete();
+                console.log('Call notification deleted');
 
                 if (callerCallId && callDoc) {
                     const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
                     if (callerCallIdDoc.exists) {
                         const callerUid = callerCallIdDoc.data().uid;
-                        await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).update({
-                            status: 'rejected',
-                            rejectedAt: firebase.firestore.FieldValue.serverTimestamp()
-                        });
-                        console.log('Caller notified of rejection');
+                        await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).delete();
+                        console.log('Caller’s call notification deleted');
                     }
                 }
+            } endCall();
             } catch (error) {
                 console.error('Error rejecting call:', error);
                 callStatus.textContent = 'Error rejecting call: ' + error.message;
@@ -765,9 +800,18 @@
         }
 
         async function endCall() {
+            console.log('Ending call');
             if (peerConnection) {
                 peerConnection.close();
                 peerConnection = null;
+            }
+            if (remoteStream) {
+                remoteStream.getTracks().forEach(track => track.stop());
+                remoteStream = null;
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
             }
 
             try {
@@ -776,32 +820,22 @@
                     const targetCallIdDoc = await db.collection('callIds').doc(targetCallId).get();
                     if (targetCallIdDoc.exists) {
                         const targetUid = targetCallIdDoc.data().uid;
-                        await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).update({
-                            status: 'ended',
-                            endedAt: firebase.firestore.FieldValue.serverTimestamp()
-                        });
-                        console.log('Target user notified of call end');
+                        await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).delete();
+                        console.log('Target user’s call notification deleted');
                     }
-                    await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).update({
-                        status: 'ended',
-                        endedAt: firebase.firestore.FieldValue.serverTimestamp()
-                    });
-                    console.log('Caller’s call document marked as ended');
+                    await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).delete();
+                    console.log('Caller’s call notification deleted');
+                    await callDoc.update({ status: 'ended', endedAt: firebase.firestore.FieldValue.serverTimestamp() });
                 } else if (callerCallId && callDoc) {
                     const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
                     if (callerCallIdDoc.exists) {
                         const callerUid = callerCallIdDoc.data().uid;
-                        await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).update({
-                            status: 'ended',
-                            endedAt: firebase.firestore.FieldValue.serverTimestamp()
-                        });
-                        console.log('Caller notified of call end');
+                        await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).delete();
+                        console.log('Caller’s call notification deleted');
                     }
-                    await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).update({
-                        status: 'ended',
-                        endedAt: firebase.firestore.FieldValue.serverTimestamp()
-                    });
-                    console.log('Callee’s call document marked as ended');
+                    await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).delete();
+                    console.log('Callee’s call notification deleted');
+                    await callDoc.update({ status: 'ended', endedAt: firebase.firestore.FieldValue.serverTimestamp() });
                 }
             } catch (error) {
                 console.error('Error ending call:', error);
@@ -811,6 +845,7 @@
             resetCallState();
             callStatus.textContent = 'Call ended';
             setTimeout(() => callStatus.textContent = '', 3000);
+            initMediaStream(); // Reinitialize media for next call
         }
 
         async function createPeerConnection() {
@@ -831,6 +866,7 @@
             if (localStream) {
                 localStream.getTracks().forEach(track => {
                     peerConnection.addTrack(track, localStream);
+                    console.log('Added track to peerConnection:', track);
                 });
             } else {
                 console.error('Local stream is not available');
@@ -839,11 +875,15 @@
             }
 
             peerConnection.ontrack = event => {
+                console.log('ontrack event:', event);
                 if (event.streams[0]) {
                     event.streams[0].getTracks().forEach(track => {
                         remoteStream.addTrack(track);
+                        console.log('Added remote track:', track);
                     });
-                    console.log('Remote stream tracks added:', remoteStream.getTracks());
+                    remoteVideo.srcObject = remoteStream;
+                    remotePlaceholder.style.display = 'none';
+                    remoteVideo.style.display = 'block';
                 }
             };
 
@@ -861,6 +901,7 @@
             peerConnection.oniceconnectionstatechange = () => {
                 console.log('ICE connection state:', peerConnection.iceConnectionState);
                 if (peerConnection.iceConnectionState === 'failed') {
+                    console.log('Restarting ICE');
                     peerConnection.restartIce();
                 }
             };
@@ -913,9 +954,6 @@
             } else {
                 console.log('No user, showing auth section');
                 resetCallState();
-                if (localStream) {
-                    localStream.getTracks().forEach(track => track.stop());
-                }
                 showSection(authContainer);
                 authStatus.textContent = '';
             }
@@ -931,9 +969,6 @@
                     });
                 }
                 resetCallState();
-                if (localStream) {
-                    localStream.getTracks().forEach(track => track.stop());
-                }
             } catch (error) {
                 console.error('Error during cleanup:', error);
             }
