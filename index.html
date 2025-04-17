@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VideoCall Pro - Login</title>
+    <title>VideoCall Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
     <style>
         * {
@@ -16,21 +16,27 @@
         body {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
+            color: white;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: white;
+            padding: 20px;
         }
 
-        .auth-container {
+        .auth-container, .callid-container, .call-container {
             background: rgba(255, 255, 255, 0.1);
             border-radius: 15px;
             padding: 40px;
             width: 100%;
-            max-width: 400px;
+            max-width: 1200px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
             backdrop-filter: blur(10px);
             text-align: center;
+            display: none;
+        }
+
+        .active {
+            display: block;
         }
 
         h2 {
@@ -88,10 +94,128 @@
             min-height: 24px;
             color: #ff4d4d;
         }
+
+        .video-container {
+            display: flex;
+            gap: 20px;
+            margin-top: 40px;
+        }
+
+        .video-box {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 15px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            min-height: 400px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        video {
+            width: 100%;
+            border-radius: 10px;
+            transform: scaleX(-1);
+            max-height: 400px;
+            object-fit: cover;
+        }
+
+        .placeholder {
+            text-align: center;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .code-section {
+            text-align: center;
+            margin-top: 40px;
+        }
+
+        .call-alert {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+            animation: popIn 0.3s ease;
+            z-index: 100;
+        }
+
+        .call-alert button {
+            margin: 10px;
+        }
+
+        @keyframes popIn {
+            from { transform: translate(-50%, -50%) scale(0.5); }
+            to { transform: translate(-50%, -50%) scale(1); }
+        }
+
+        @media (max-width: 768px) {
+            .auth-container, .callid-container, .call-container {
+                padding: 20px;
+            }
+
+            .video-container {
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .video-box {
+                min-height: 200px;
+                max-height: 300px;
+                width: 100%;
+            }
+
+            video {
+                max-height: 250px;
+            }
+
+            .local-video-box {
+                order: 1;
+            }
+
+            .remote-video-box {
+                order: 2;
+            }
+
+            .controls {
+                gap: 10px;
+                padding: 10px;
+                justify-content: center;
+            }
+
+            button {
+                padding: 10px 20px;
+                font-size: 14px;
+            }
+
+            input {
+                width: 80%;
+                max-width: 250px;
+            }
+        }
+
+        @media (min-width: 769px) {
+            .video-container {
+                flex-direction: row;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="auth-container">
+    <div class="auth-container" id="authContainer">
         <h2 id="formTitle">Login</h2>
         <div class="form-group">
             <input type="email" id="email" placeholder="Email" required>
@@ -101,16 +225,57 @@
         </div>
         <button id="authButton" onclick="handleAuth()">Login</button>
         <div class="toggle-link" onclick="toggleForm()">Don't have an account? Sign Up</div>
-        <div class="status" id="status"></div>
+        <div class="status" id="authStatus"></div>
     </div>
 
-    <!-- Firebase -->
+    <div class="callid-container" id="callIdContainer">
+        <h2>Create Your Call ID</h2>
+        <div class="form-group">
+            <input type="text" id="callIdInput" placeholder="Enter unique Call ID (e.g., raghu123)" required>
+        </div>
+        <button onclick="saveCallId()">Save Call ID</button>
+        <div class="status" id="callIdStatus"></div>
+    </div>
+
+    <div class="call-container" id="callContainer">
+        <div class="code-section">
+            <h2>Your Call ID: <span id="myCallId"></span></h2>
+            <button onclick="signOut()">Sign Out</button>
+            <input type="text" id="targetCallId" placeholder="Enter Call ID to call">
+            <button onclick="startCall()">Call</button>
+            <div class="status" id="callStatus"></div>
+        </div>
+
+        <div class="video-container">
+            <div class="video-box local-video-box">
+                <video id="localVideo" autoplay muted></video>
+                <div id="localPlaceholder" class="placeholder">Your camera will appear here</div>
+            </div>
+            <div class="video-box remote-video-box">
+                <video id="remoteVideo" autoplay></video>
+                <div id="remotePlaceholder" class="placeholder">Waiting for connection...</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="toggleCam" onclick="toggleCamera()">Camera Off</button>
+            <button id="toggleMic" onclick="toggleMic()">Mic Off</button>
+            <button id="endCall" onclick="endCall()" style="display: none; background: #ff4d4d;">End Call</button>
+        </div>
+
+        <div id="incomingCallAlert" class="call-alert" style="display: none;">
+            <h2>Incoming Call from <span id="callerId"></span></h2>
+            <button onclick="acceptCall()">Accept</button>
+            <button onclick="rejectCall()" style="background: #ff4d4d;">Reject</button>
+        </div>
+    </div>
+
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
 
     <script>
-        // Firebase Config (Replace with your project config)
 const firebaseConfig = {
   apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
   authDomain: "live-call-33ea7.firebaseapp.com",
@@ -125,84 +290,552 @@ const firebaseConfig = {
         const auth = firebase.auth();
         const db = firebase.firestore();
 
-        // DOM Elements
+        const authContainer = document.getElementById('authContainer');
+        const callIdContainer = document.getElementById('callIdContainer');
+        const callContainer = document.getElementById('callContainer');
         const formTitle = document.getElementById('formTitle');
         const authButton = document.getElementById('authButton');
         const emailInput = document.getElementById('email');
         const passwordInput = document.getElementById('password');
-        const statusDiv = document.getElementById('status');
+        const authStatus = document.getElementById('authStatus');
+        const callIdInput = document.getElementById('callIdInput');
+        const callIdStatus = document.getElementById('callIdStatus');
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const localPlaceholder = document.getElementById('localPlaceholder');
+        const remotePlaceholder = document.getElementById('remotePlaceholder');
+        const callStatus = document.getElementById('callStatus');
+        const incomingCallAlert = document.getElementById('incomingCallAlert');
+        const callerIdSpan = document.getElementById('callerId');
+        const endCallBtn = document.getElementById('endCall');
+        const myCallIdSpan = document.getElementById('myCallId');
 
         let isLogin = true;
-        let isRedirecting = false; // Prevent multiple redirects
+        let localStream;
+        let remoteStream;
+        let peerConnection;
+        let myCallId;
+        let targetCallId;
+        let callerCallId;
+        let isCaller = false;
+        let callDoc;
+        let mediaInitialized = false;
+        let callListeners = [];
 
-        // Toggle between login and signup
+        function showSection(section) {
+            console.log(`Showing section: ${section.id}`);
+            authContainer.classList.remove('active');
+            callIdContainer.classList.remove('active');
+            callContainer.classList.remove('active');
+            section.classList.add('active');
+            // Force reflow to ensure DOM update
+            section.offsetHeight;
+        }
+
         function toggleForm() {
             isLogin = !isLogin;
             formTitle.textContent = isLogin ? 'Login' : 'Sign Up';
             authButton.textContent = isLogin ? 'Login' : 'Sign Up';
-            statusDiv.textContent = '';
+            authStatus.textContent = '';
             document.querySelector('.toggle-link').textContent = isLogin ? "Don't have an account? Sign Up" : 'Already have an account? Login';
         }
 
-        // Handle login/signup
         async function handleAuth() {
             const email = emailInput.value.trim();
             const password = passwordInput.value.trim();
-            statusDiv.textContent = '';
+            authStatus.textContent = '';
 
             if (!email || !password) {
-                statusDiv.textContent = 'Please enter email and password';
+                authStatus.textContent = 'Please enter email and password';
                 return;
             }
 
             try {
                 if (isLogin) {
+                    console.log('Attempting login with:', email);
                     await auth.signInWithEmailAndPassword(email, password);
-                    // Redirect handled by onAuthStateChanged
+                    console.log('Login successful');
+                    authStatus.textContent = 'Login successful, loading...';
                 } else {
+                    console.log('Attempting signup with:', email);
                     await auth.createUserWithEmailAndPassword(email, password);
-                    console.log('Signup successful, redirecting to callid.html');
-                    window.location.href = 'callid.html';
+                    console.log('Signup successful, showing call ID creation');
+                    showSection(callIdContainer);
+                    authStatus.textContent = '';
                 }
             } catch (error) {
                 console.error('Auth error:', error.message);
-                statusDiv.textContent = error.message;
+                authStatus.textContent = error.message;
             }
         }
 
-        // Centralized redirect logic with delay
-        auth.onAuthStateChanged(user => {
-            if (isRedirecting) {
-                console.log('Redirect already in progress, skipping');
+        async function saveCallId() {
+            const callId = callIdInput.value.trim();
+            callIdStatus.textContent = '';
+
+            if (!callId || callId.length < 4) {
+                callIdStatus.textContent = 'Call ID must be at least 4 characters';
                 return;
             }
-            isRedirecting = true;
 
-            console.log('Auth state changed:', user ? `User logged in: ${user.uid}` : 'No user');
+            try {
+                const callIdDoc = await db.collection('callIds').doc(callId).get();
+                if (callIdDoc.exists) {
+                    callIdStatus.textContent = 'Call ID already taken, please choose another';
+                    return;
+                }
 
-            if (user) {
-                // Delay redirect to ensure Firestore query completes
-                setTimeout(async () => {
-                    try {
-                        const userDoc = await db.collection('users').doc(user.uid).get();
-                        if (userDoc.exists && userDoc.data().callId) {
-                            console.log(`CallId found: ${userDoc.data().callId}, redirecting to call.html`);
-                            window.location.href = 'call.html';
-                        } else {
-                            console.log('No callId, redirecting to callid.html');
-                            window.location.href = 'callid.html';
+                const user = auth.currentUser;
+                await db.collection('users').doc(user.uid).set({
+                    callId: callId,
+                    online: true,
+                    lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+
+                await db.collection('callIds').doc(callId).set({ uid: user.uid });
+                console.log(`CallId ${callId} saved, initializing call section`);
+                myCallId = callId;
+                await initCallSection();
+                showSection(callContainer);
+            } catch (error) {
+                console.error('Error saving callId:', error);
+                callIdStatus.textContent = error.message;
+            }
+        }
+
+        function signOut() {
+            auth.signOut().then(() => {
+                console.log('Signed out, showing auth section');
+                resetCallState();
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                }
+                showSection(authContainer);
+                authStatus.textContent = 'Signed out successfully';
+            }).catch(error => {
+                console.error('Sign out error:', error);
+                callStatus.textContent = 'Error signing out';
+            });
+        }
+
+        function resetCallState() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            if (remoteStream) {
+                remoteStream.getTracks().forEach(track => track.stop());
+                remoteStream = null;
+            }
+            remoteVideo.srcObject = null;
+            remotePlaceholder.style.display = 'block';
+            remoteVideo.style.display = 'none';
+            endCallBtn.style.display = 'none';
+            targetCallId = null;
+            callerCallId = null;
+            isCaller = false;
+            callDoc = null;
+            callListeners.forEach(unsubscribe => unsubscribe());
+            callListeners = [];
+            mediaInitialized = false;
+        }
+
+        async function initCallSection() {
+            try {
+                console.log('Initializing call section for callId:', myCallId);
+                myCallIdSpan.textContent = myCallId;
+
+                await db.collection('users').doc(auth.currentUser.uid).set({
+                    online: true,
+                    lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+
+                const callListener = db.collection('users').doc(auth.currentUser.uid).collection('calls').onSnapshot(snapshot => {
+                    snapshot.docChanges().forEach(change => {
+                        if (change.type === 'added') {
+                            handleIncomingCall(change.doc.data());
                         }
-                    } catch (error) {
-                        console.error('Error checking callId:', error);
-                        statusDiv.textContent = 'Error checking user data. Please try again.';
-                        isRedirecting = false;
+                    });
+                });
+                callListeners.push(callListener);
+
+                try {
+                    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    localVideo.srcObject = localStream;
+                    localPlaceholder.style.display = 'none';
+                    localVideo.style.display = 'block';
+                    mediaInitialized = true;
+                    console.log('Media initialized successfully');
+                } catch (error) {
+                    console.error('Error accessing media devices:', error);
+                    callStatus.textContent = 'Could not access camera/microphone. Please grant permissions and refresh.';
+                    mediaInitialized = false;
+                }
+            } catch (error) {
+                console.error('Error initializing call section:', error);
+                callStatus.textContent = 'Error loading call data. Please sign out and try again.';
+            }
+        }
+
+        function handleIncomingCall(callData) {
+            if (callData.status === 'calling') {
+                callerCallId = callData.caller;
+                callerIdSpan.textContent = callerCallId;
+                incomingCallAlert.style.display = 'block';
+                callStatus.textContent = `Incoming call from ${callerCallId}`;
+            } else if (callData.status === 'ended') {
+                if (incomingCallAlert.style.display === 'block') {
+                    incomingCallAlert.style.display = 'none';
+                    callStatus.textContent = 'Call ended by the other party';
+                    setTimeout(() => callStatus.textContent = '', 3000);
+                }
+            }
+        }
+
+        async function startCall() {
+            if (!mediaInitialized) {
+                callStatus.textContent = 'Camera/microphone not initialized. Please refresh and allow permissions.';
+                return;
+            }
+
+            resetCallState();
+
+            targetCallId = document.getElementById('targetCallId').value.trim();
+            if (!targetCallId) {
+                callStatus.textContent = 'Please enter a Call ID to call';
+                return;
+            }
+            if (targetCallId === myCallId) {
+                callStatus.textContent = "You can't call yourself";
+                return;
+            }
+
+            callStatus.textContent = `Calling ${targetCallId}...`;
+            isCaller = true;
+
+            try {
+                const targetCallIdDoc = await db.collection('callIds').doc(targetCallId).get();
+                if (!targetCallIdDoc.exists) {
+                    callStatus.textContent = 'Call ID not found';
+                    return;
+                }
+
+                const targetUid = targetCallIdDoc.data().uid;
+                await createPeerConnection();
+
+                callDoc = db.collection('calls').doc();
+                const offerCandidates = callDoc.collection('offerCandidates');
+                const answerCandidates = callDoc.collection('answerCandidates');
+
+                await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).set({
+                    caller: myCallId,
+                    callId: callDoc.id,
+                    status: 'calling',
+                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                });
+
+                const offerDescription = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offerDescription);
+
+                const offer = {
+                    sdp: offerDescription.sdp,
+                    type: offerDescription.type,
+                    caller: myCallId,
+                    callee: targetCallId
+                };
+
+                await callDoc.set({ offer });
+
+                const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
+                    const data = snapshot.data();
+                    if (!peerConnection.currentRemoteDescription && data?.answer) {
+                        const answerDescription = new RTCSessionDescription(data.answer);
+                        await peerConnection.setRemoteDescription(answerDescription);
+                        callStatus.textContent = `Connected with ${targetCallId}`;
+                        endCallBtn.style.display = 'block';
                     }
-                }, 500); // 500ms delay for Firestore
+                });
+                callListeners.push(callSnapshotListener);
+
+                const answerCandidatesListener = answerCandidates.onSnapshot(snapshot => {
+                    snapshot.docChanges().forEach(async change => {
+                        if (change.type === 'added') {
+                            const candidate = new RTCIceCandidate(change.doc.data());
+                            await peerConnection.addIceCandidate(candidate);
+                        }
+                    });
+                });
+                callListeners.push(answerCandidatesListener);
+
+                peerConnection.onicecandidate = async event => {
+                    if (event.candidate) {
+                        await offerCandidates.add(event.candidate.toJSON());
+                    }
+                };
+            } catch (error) {
+                console.error('Error starting call:', error);
+                callStatus.textContent = 'Error starting call. Please try again.';
+            }
+        }
+
+        async function acceptCall() {
+            if (!mediaInitialized) {
+                callStatus.textContent = 'Camera/microphone not initialized. Please refresh and allow permissions.';
+                incomingCallAlert.style.display = 'none';
+                return;
+            }
+
+            resetCallState();
+
+            incomingCallAlert.style.display = 'none';
+            callStatus.textContent = `Connecting with ${callerCallId}...`;
+
+            try {
+                await createPeerConnection();
+
+                const user = auth.currentUser;
+                const callQuery = await db.collection('users').doc(user.uid).collection('calls')
+                    .where('caller', '==', callerCallId)
+                    .where('status', '==', 'calling')
+                    .get();
+
+                if (callQuery.empty) {
+                    callStatus.textContent = 'Call no longer exists';
+                    return;
+                }
+
+                const callData = callQuery.docs[0].data();
+                callDoc = db.collection('calls').doc(callData.callId);
+                const offerCandidates = callDoc.collection('offerCandidates');
+                const answerCandidates = callDoc.collection('answerCandidates');
+
+                await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).update({
+                    status: 'answered'
+                });
+
+                const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
+                    const data = snapshot.data();
+                    if (!peerConnection.currentRemoteDescription && data?.offer) {
+                        const offerDescription = data.offer;
+                        await peerConnection.setRemoteDescription(new RTCSessionDescription(offerDescription));
+
+                        const answerDescription = await peerConnection.createAnswer();
+                        await peerConnection.setLocalDescription(answerDescription);
+
+                        const answer = {
+                            type: answerDescription.type,
+                            sdp: answerDescription.sdp
+                        };
+
+                        await callDoc.update({ answer });
+
+                        callStatus.textContent = `Connected with ${callerCallId}`;
+                        endCallBtn.style.display = 'block';
+                    }
+                });
+                callListeners.push(callSnapshotListener);
+
+                const offerCandidatesListener = offerCandidates.onSnapshot(snapshot => {
+                    snapshot.docChanges().forEach(async change => {
+                        if (change.type === 'added') {
+                            await peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+                        }
+                    });
+                });
+                callListeners.push(offerCandidatesListener);
+
+                peerConnection.onicecandidate = async event => {
+                    if (event.candidate) {
+                        await answerCandidates.add(event.candidate.toJSON());
+                    }
+                };
+            } catch (error) {
+                console.error('Error accepting call:', error);
+                callStatus.textContent = 'Error accepting call. Please try again.';
+            }
+        }
+
+        async function rejectCall() {
+            incomingCallAlert.style.display = 'none';
+            callStatus.textContent = 'Call rejected';
+            setTimeout(() => callStatus.textContent = '', 3000);
+
+            try {
+                const user = auth.currentUser;
+                const callQuery = await db.collection('users').doc(user.uid).collection('calls')
+                    .where('caller', '==', callerCallId)
+                    .where('status', '==', 'calling')
+                    .get();
+
+                if (!callQuery.empty) {
+                    await db.collection('users').doc(user.uid).collection('calls').doc(callQuery.docs[0].id).update({
+                        status: 'rejected'
+                    });
+                }
+            } catch (error) {
+                console.error('Error rejecting call:', error);
+            }
+        }
+
+        async function endCall() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+
+            try {
+                const user = auth.currentUser;
+                if (isCaller && targetCallId && callDoc) {
+                    const targetCallIdDoc = await db.collection('callIds').doc(targetCallId).get();
+                    if (targetCallIdDoc.exists) {
+                        const targetUid = targetCallIdDoc.data().uid;
+                        await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).update({
+                            status: 'ended'
+                        });
+                    }
+                } else if (callerCallId && callDoc) {
+                    const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
+                    if (callerCallIdDoc.exists) {
+                        const callerUid = callerCallIdDoc.data().uid;
+                        await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).update({
+                            status: 'ended'
+                        });
+                    }
+                }
+            } catch (error) {
+                console.error('Error ending call:', error);
+            }
+
+            resetCallState();
+            callStatus.textContent = 'Call ended';
+            setTimeout(() => callStatus.textContent = '', 3000);
+        }
+
+        async function createPeerConnection() {
+            const configuration = {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' }
+                ]
+            };
+
+            peerConnection = new RTCPeerConnection(configuration);
+            remoteStream = new MediaStream();
+            remoteVideo.srcObject = remoteStream;
+            remotePlaceholder.style.display = 'none';
+            remoteVideo.style.display = 'block';
+
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
             } else {
-                console.log('No user, staying on index.html');
-                isRedirecting = false;
+                console.error('Local stream is not available');
+                callStatus.textContent = 'Cannot start call: Camera/microphone not available';
+                return;
+            }
+
+            peerConnection.ontrack = event => {
+                if (event.streams[0]) {
+                    event.streams[0].getTracks().forEach(track => {
+                        remoteStream.addTrack(track);
+                    });
+                }
+            };
+
+            peerConnection.onconnectionstatechange = () => {
+                console.log('Connection state:', peerConnection.connectionState);
+                if (peerConnection.connectionState === 'disconnected' || 
+                    peerConnection.connectionState === 'failed') {
+                    console.log('Connection failed or disconnected, ending call');
+                    endCall();
+                } else if (peerConnection.connectionState === 'connected') {
+                    console.log('Peer connection established successfully');
+                }
+            };
+
+            peerConnection.oniceconnectionstatechange = () => {
+                console.log('ICE connection state:', peerConnection.iceConnectionState);
+                if (peerConnection.iceConnectionState === 'failed') {
+                    peerConnection.restartIce();
+                }
+            };
+        }
+
+        function toggleCamera() {
+            if (!localStream) return;
+            const videoTrack = localStream.getVideoTracks()[0];
+            if (videoTrack) {
+                videoTrack.enabled = !videoTrack.enabled;
+                document.getElementById('toggleCam').textContent = 
+                    videoTrack.enabled ? 'Camera Off' : 'Camera On';
+            }
+        }
+
+        function toggleMic() {
+            if (!localStream) return;
+            const audioTrack = localStream.getAudioTracks()[0];
+            if (audioTrack) {
+                audioTrack.enabled = !audioTrack.enabled;
+                document.getElementById('toggleMic').textContent = 
+                    audioTrack.enabled ? 'Mic Off' : 'Mic On';
+            }
+        }
+
+        auth.onAuthStateChanged(async user => {
+            console.log('Auth state changed:', user ? `User logged in: ${user.uid}` : 'No user');
+            if (user) {
+                console.log('Checking user data in Firestore...');
+                try {
+                    // Add slight delay to ensure Firestore is ready
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const userDoc = await db.collection('users').doc(user.uid).get();
+                    console.log('Firestore query completed, exists:', userDoc.exists, 'data:', userDoc.data());
+
+                    if (userDoc.exists && userDoc.data().callId) {
+                        console.log(`CallId found: ${userDoc.data().callId}, initializing call section`);
+                        myCallId = userDoc.data().callId;
+                        await initCallSection();
+                        showSection(callContainer);
+                        authStatus.textContent = ''; // Clear login status
+                    } else {
+                        console.log('No callId found, showing call ID creation');
+                        showSection(callIdContainer);
+                        authStatus.textContent = '';
+                    }
+                } catch (error) {
+                    console.error('Error checking user data:', error);
+                    authStatus.textContent = 'Error loading user data: ' + error.message;
+                }
+            } else {
+                console.log('No user, showing auth section');
+                resetCallState();
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                }
+                showSection(authContainer);
+                authStatus.textContent = '';
             }
         });
+
+        window.onbeforeunload = async () => {
+            try {
+                const user = auth.currentUser;
+                if (user) {
+                    await db.collection('users').doc(user.uid).update({
+                        online: false,
+                        lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                }
+                resetCallState();
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                }
+            } catch (error) {
+                console.error('Error during cleanup:', error);
+            }
+        };
     </script>
 </body>
 </html>
