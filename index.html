@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VideoCall Pro</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Poppins', sans-serif;
+        }
+
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .video-container {
+            display: flex;
+            gap: 20px;
+            margin-top: 40px;
+        }
+
+        .video-box {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 15px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        video {
+            width: 100%;
+            border-radius: 10px;
+            transform: scaleX(-1);
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        button {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 25px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(5px);
+        }
+
+        button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .code-section {
+            text-align: center;
+            margin-top: 40px;
+        }
+
+        input {
+            padding: 12px;
+            border-radius: 25px;
+            border: none;
+            margin: 10px;
+            width: 200px;
+        }
+
+        .call-alert {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+            animation: popIn 0.3s ease;
+        }
+
+        @keyframes popIn {
+            from { transform: translate(-50%, -50%) scale(0.5); }
+            to { transform: translate(-50%, -50%) scale(1); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="code-section">
+            <h2>Your Code: <span id="myCode"></span></h2>
+            <input type="text" id="targetCode" placeholder="Enter code to call">
+            <button onclick="startCall()">Call</button>
+        </div>
+
+        <div class="video-container">
+            <div class="video-box">
+                <video id="localVideo" autoplay muted></video>
+            </div>
+            <div class="video-box">
+                <video id="remoteVideo" autoplay></video>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="toggleCam" onclick="toggleCamera()">Camera Off</button>
+            <button id="toggleMic" onclick="toggleMic()">Mic Off</button>
+        </div>
+    </div>
+
+    <!-- Firebase and WebRTC Adapter -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+
+    <script>
+        // Firebase Config (Replace with your config)
+       const firebaseConfig = {
+  apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
+  authDomain: "live-call-33ea7.firebaseapp.com",
+  projectId: "live-call-33ea7",
+  storageBucket: "live-call-33ea7.firebasestorage.app",
+  messagingSenderId: "518167322129",
+  appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
+};
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        let localStream;
+        let remoteStream;
+        let peerConnection;
+        let myCode;
+        let targetCode;
+
+        // Generate unique code
+        function generateCode() {
+            return Math.random().toString(36).substr(2, 6);
+        }
+
+        // Initialize
+        async function init() {
+            myCode = generateCode();
+            document.getElementById('myCode').textContent = myCode;
+            
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                document.getElementById('localVideo').srcObject = localStream;
+            } catch (error) {
+                console.error('Error accessing media devices:', error);
+            }
+        }
+
+        // WebRTC Setup
+        async function createPeerConnection() {
+            const configuration = {
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            };
+
+            peerConnection = new RTCPeerConnection(configuration);
+            remoteStream = new MediaStream();
+            document.getElementById('remoteVideo').srcObject = remoteStream;
+
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            peerConnection.ontrack = event => {
+                event.streams[0].getTracks().forEach(track => {
+                    remoteStream.addTrack(track);
+                });
+            };
+
+            // Listen for ICE candidates
+            peerConnection.onicecandidate = async event => {
+                if (event.candidate) {
+                    await db.collection('calls').doc(targetCode).collection('candidates').add(event.candidate.toJSON());
+                }
+            };
+        }
+
+        // Start call
+        async function startCall() {
+            targetCode = document.getElementById('targetCode').value;
+            await createPeerConnection();
+
+            const callDoc = db.collection('calls').doc(targetCode);
+            const offerCandidates = callDoc.collection('candidates');
+            const answerCandidates = callDoc.collection('answerCandidates');
+
+            // Create offer
+            const offerDescription = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offerDescription);
+
+            const offer = {
+                sdp: offerDescription.sdp,
+                type: offerDescription.type,
+                caller: myCode
+            };
+
+            await callDoc.set({ offer });
+
+            // Listen for answer
+            callDoc.onSnapshot(async snapshot => {
+                const data = snapshot.data();
+                if (!peerConnection.currentRemoteDescription && data?.answer) {
+                    const answerDescription = new RTCSessionDescription(data.answer);
+                    await peerConnection.setRemoteDescription(answerDescription);
+                }
+            });
+
+            // Listen for remote ICE candidates
+            answerCandidates.onSnapshot(snapshot => {
+                snapshot.docChanges().forEach(change => {
+                    if (change.type === 'added') {
+                        const candidate = new RTCIceCandidate(change.doc.data());
+                        peerConnection.addIceCandidate(candidate);
+                    }
+                });
+            });
+        }
+
+        // Toggle controls
+        function toggleCamera() {
+            const videoTrack = localStream.getVideoTracks()[0];
+            videoTrack.enabled = !videoTrack.enabled;
+            document.getElementById('toggleCam').textContent = 
+                videoTrack.enabled ? 'Camera Off' : 'Camera On';
+        }
+
+        function toggleMic() {
+            const audioTrack = localStream.getAudioTracks()[0];
+            audioTrack.enabled = !audioTrack.enabled;
+            document.getElementById('toggleMic').textContent = 
+                audioTrack.enabled ? 'Mic Off' : 'Mic On';
+        }
+
+        // Initialize app
+        init();
+    </script>
+</body>
+</html>
