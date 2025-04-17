@@ -111,14 +111,15 @@
 
     <script>
         // Firebase Config
-        const firebaseConfig = {
-            apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
-            authDomain: "live-call-33ea7.firebaseapp.com",
-            projectId: "live-call-33ea7",
-            storageBucket: "live-call-33ea7.firebasestorage.app",
-            messagingSenderId: "518167322129",
-            appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
-        };
+const firebaseConfig = {
+  apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
+  authDomain: "live-call-33ea7.firebaseapp.com",
+  projectId: "live-call-33ea7",
+  storageBucket: "live-call-33ea7.firebasestorage.app",
+  messagingSenderId: "518167322129",
+  appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
+};
+
 
         firebase.initializeApp(firebaseConfig);
         const auth = firebase.auth();
@@ -132,6 +133,7 @@
         const statusDiv = document.getElementById('status');
 
         let isLogin = true;
+        let isRedirecting = false; // Prevent multiple redirects
 
         // Toggle between login and signup
         function toggleForm() {
@@ -156,25 +158,41 @@
             try {
                 if (isLogin) {
                     await auth.signInWithEmailAndPassword(email, password);
+                    // Redirect handled by onAuthStateChanged
                 } else {
                     await auth.createUserWithEmailAndPassword(email, password);
-                    window.location.href = 'callid.html'; // Always redirect to callid.html after signup
-                    return;
+                    window.location.href = 'callid.html'; // Always to callid.html after signup
                 }
             } catch (error) {
                 statusDiv.textContent = error.message;
             }
         }
 
-        // Redirect based on auth state and callId
+        // Centralized redirect logic
         auth.onAuthStateChanged(async user => {
+            if (isRedirecting) return; // Prevent multiple redirects
+            isRedirecting = true;
+
+            console.log('Auth state changed:', user ? 'User logged in' : 'No user');
+
             if (user) {
-                const userDoc = await db.collection('users').doc(user.uid).get();
-                if (userDoc.exists && userDoc.data().callId) {
-                    window.location.href = 'call.html'; // Direct to call.html if callId exists
-                } else {
-                    window.location.href = 'callid.html'; // To callid.html if no callId
+                try {
+                    const userDoc = await db.collection('users').doc(user.uid).get();
+                    if (userDoc.exists && userDoc.data().callId) {
+                        console.log('CallId found, redirecting to call.html');
+                        window.location.href = 'call.html';
+                    } else {
+                        console.log('No callId, redirecting to callid.html');
+                        window.location.href = 'callid.html';
+                    }
+                } catch (error) {
+                    console.error('Error checking callId:', error);
+                    statusDiv.textContent = 'Error checking user data. Please try again.';
+                    isRedirecting = false;
                 }
+            } else {
+                console.log('No user, staying on index.html');
+                isRedirecting = false;
             }
         });
     </script>
