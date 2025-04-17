@@ -49,6 +49,7 @@
             border-radius: 10px;
             transform: scaleX(-1);
             max-height: 400px;
+            object-fit: cover;
         }
 
         .placeholder {
@@ -59,8 +60,9 @@
         .controls {
             display: flex;
             justify-content: center;
-            gap: 20px;
+            gap: 15px;
             margin-top: 20px;
+            flex-wrap: wrap;
         }
 
         button {
@@ -72,11 +74,16 @@
             cursor: pointer;
             transition: all 0.3s ease;
             backdrop-filter: blur(5px);
+            font-size: 16px;
         }
 
         button:hover {
             background: rgba(255, 255, 255, 0.3);
             transform: translateY(-2px);
+        }
+
+        button:active {
+            transform: scale(0.95);
         }
 
         .code-section {
@@ -119,6 +126,55 @@
             margin-top: 20px;
             min-height: 24px;
         }
+
+        /* Mobile Layout */
+        @media (max-width: 768px) {
+            .video-container {
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .video-box {
+                min-height: 200px;
+                max-height: 300px;
+                width: 100%;
+            }
+
+            video {
+                max-height: 250px;
+            }
+
+            .local-video-box {
+                order: 1;
+            }
+
+            .remote-video-box {
+                order: 2;
+            }
+
+            .controls {
+                gap: 10px;
+                padding: 10px;
+                justify-content: center;
+            }
+
+            button {
+                padding: 10px 20px;
+                font-size: 14px;
+            }
+
+            input {
+                width: 80%;
+                max-width: 250px;
+            }
+        }
+
+        /* Desktop Layout */
+        @media (min-width: 769px) {
+            .video-container {
+                flex-direction: row;
+            }
+        }
     </style>
 </head>
 <body>
@@ -131,11 +187,11 @@
         </div>
 
         <div class="video-container">
-            <div class="video-box">
+            <div class="video-box local-video-box">
                 <video id="localVideo" autoplay muted></video>
                 <div id="localPlaceholder" class="placeholder">Your camera will appear here</div>
             </div>
-            <div class="video-box">
+            <div class="video-box remote-video-box">
                 <video id="remoteVideo" autoplay></video>
                 <div id="remotePlaceholder" class="placeholder">Waiting for connection...</div>
             </div>
@@ -193,6 +249,7 @@
         let isCaller = false;
         let callDoc;
         let mediaInitialized = false;
+        let callListeners = []; // Store Firestore listeners for cleanup
 
         // Generate unique code (4-10 characters)
         function generateCode() {
@@ -205,6 +262,29 @@
             return result;
         }
 
+        // Reset call state
+        function resetCallState() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            if (remoteStream) {
+                remoteStream.getTracks().forEach(track => track.stop());
+                remoteStream = null;
+            }
+            remoteVideo.srcObject = null;
+            remotePlaceholder.style.display = 'block';
+            remoteVideo.style.display = 'none';
+            endCallBtn.style.display = 'none';
+            targetCode = null;
+            callerCode = null;
+            isCaller = false;
+            callDoc = null;
+            // Unsubscribe from all Firestore listeners
+            callListeners.forEach(unsubscribe => unsubscribe());
+            callListeners = [];
+        }
+
         // Initialize the application
         async function init() {
             myCode = generateCode();
@@ -215,13 +295,14 @@
                 lastSeen: firebase.firestore.FieldValue.serverTimestamp()
             });
 
-            db.collection('users').doc(myCode).collection('calls').onSnapshot(snapshot => {
+            const callListener = db.collection('users').doc(myCode).collection('calls').onSnapshot(snapshot => {
                 snapshot.docChanges().forEach(change => {
                     if (change.type === 'added') {
                         handleIncomingCall(change.doc.data());
                     }
                 });
             });
+            callListeners.push(callListener);
 
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -258,6 +339,8 @@
                 statusDiv.textContent = 'Camera/microphone not initialized. Please refresh and allow permissions.';
                 return;
             }
+
+            resetCallState(); // Reset state before new call
 
             targetCode = document.getElementById('targetCode').value.trim();
             if (!targetCode) {
@@ -303,7 +386,7 @@
 
             await callDoc.set({ offer });
 
-            callDoc.onSnapshot(async snapshot => {
+            const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
                 const data = snapshot.data();
                 if (!peerConnection.currentRemoteDescription && data?.answer) {
                     const answerDescription = new RTCSessionDescription(data.answer);
@@ -312,8 +395,9 @@
                     endCallBtn.style.display = 'block';
                 }
             });
+            callListeners.push(callSnapshotListener);
 
-            answerCandidates.onSnapshot(snapshot => {
+            const answerCandidatesListener = answerCandidates.onSnapshot(snapshot => {
                 snapshot.docChanges().forEach(async change => {
                     if (change.type === 'added') {
                         const candidate = new RTCIceCandidate(change.doc.data());
@@ -321,6 +405,7 @@
                     }
                 });
             });
+            callListeners.push(answerCandidatesListener);
 
             peerConnection.onicecandidate = async event => {
                 if (event.candidate) {
@@ -336,6 +421,8 @@
                 incomingCallAlert.style.display = 'none';
                 return;
             }
+
+            resetCallState(); // Reset state before accepting call
 
             incomingCallAlert.style.display = 'none';
             statusDiv.textContent = `Connecting with ${callerCode}...`;
@@ -361,7 +448,7 @@
                 status: 'answered'
             });
 
-            callDoc.onSnapshot(async snapshot => {
+            const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
                 const data = snapshot.data();
                 if (!peerConnection.currentRemoteDescription && data?.offer) {
                     const offerDescription = data.offer;
@@ -381,14 +468,16 @@
                     endCallBtn.style.display = 'block';
                 }
             });
+            callListeners.push(callSnapshotListener);
 
-            offerCandidates.onSnapshot(snapshot => {
+            const offerCandidatesListener = offerCandidates.onSnapshot(snapshot => {
                 snapshot.docChanges().forEach(async change => {
                     if (change.type === 'added') {
                         await peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
                     }
                 });
             });
+            callListeners.push(offerCandidatesListener);
 
             peerConnection.onicecandidate = async event => {
                 if (event.candidate) {
@@ -422,20 +511,17 @@
                 peerConnection = null;
             }
 
-            if (isCaller && targetCode) {
+            if (isCaller && targetCode && callDoc) {
                 await db.collection('users').doc(targetCode).collection('calls').doc(callDoc.id).update({
                     status: 'ended'
                 });
-            } else if (callerCode) {
+            } else if (callerCode && callDoc) {
                 await db.collection('users').doc(callerCode).collection('calls').doc(callDoc.id).update({
                     status: 'ended'
                 });
             }
 
-            remoteVideo.srcObject = null;
-            remotePlaceholder.style.display = 'block';
-            remoteVideo.style.display = 'none';
-            endCallBtn.style.display = 'none';
+            resetCallState();
             statusDiv.textContent = 'Call ended';
             setTimeout(() => statusDiv.textContent = '', 3000);
         }
@@ -446,7 +532,13 @@
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' }
+                    { urls: 'stun:stun2.l.google.com:19302' },
+                    // Add TURN servers for better connectivity (optional, requires credentials)
+                    // {
+                    //     urls: 'turn:your.turn.server:3478',
+                    //     username: 'username',
+                    //     credential: 'password'
+                    // }
                 ]
             };
 
@@ -475,9 +567,20 @@
             };
 
             peerConnection.onconnectionstatechange = () => {
+                console.log('Connection state:', peerConnection.connectionState);
                 if (peerConnection.connectionState === 'disconnected' || 
                     peerConnection.connectionState === 'failed') {
+                    console.log('Connection failed or disconnected, ending call');
                     endCall();
+                } else if (peerConnection.connectionState === 'connected') {
+                    console.log('Peer connection established successfully');
+                }
+            };
+
+            peerConnection.oniceconnectionstatechange = () => {
+                console.log('ICE connection state:', peerConnection.iceConnectionState);
+                if (peerConnection.iceConnectionState === 'failed') {
+                    peerConnection.restartIce();
                 }
             };
         }
@@ -515,8 +618,9 @@
                     lastSeen: firebase.firestore.FieldValue.serverTimestamp()
                 });
             }
-            if (peerConnection) {
-                peerConnection.close();
+            resetCallState();
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
             }
         };
     </script>
