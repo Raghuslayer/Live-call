@@ -770,29 +770,35 @@
             }
         }
 
-        async function rejectCall() {
-            incomingCallAlert.style.display = 'none';
-            callStatus.textContent = 'Call rejected';
-            setTimeout(() => callStatus.textContent = '', 3000);
+async function rejectCall() {
+    incomingCallAlert.style.display = 'none';
+    callStatus.textContent = 'Call rejected';
+    setTimeout(() => callStatus.textContent = '', 3000);
 
-            try {
-                const user = auth.currentUser;
-                const callDocId = incomingCallAlert.dataset.callDocId;
-                console.log('Rejecting call with doc ID:', callDocId);
+    try {
+        const user = auth.currentUser;
+        const callDocId = incomingCallAlert.dataset.callDocId;
+        console.log('Rejecting call with doc ID:', callDocId);
 
-                const callDocRef = db.collection('users').doc(user.uid).collection('calls').doc(callDocId);
-                await callDocRef.delete();
-                console.log('Call notification deleted');
+        const callDocRef = db.collection('users').doc(user.uid).collection('calls').doc(callDocId);
+        await callDocRef.delete();
+        console.log('Call notification deleted');
 
-                if (callerCallId && callDoc) {
-                    const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
-                    if (callerCallIdDoc.exists) {
-                        const callerUid = callerCallIdDoc.data().uid;
-                        await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).delete();
-                        console.log('Caller’s call notification deleted');
-                    }
-                }
-            } endCall();
+        if (callerCallId && callDoc) {
+            const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
+            if (callerCallIdDoc.exists) {
+                const callerUid = callerCallIdDoc.data().uid;
+                await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).delete();
+                console.log('Caller’s call notification deleted');
+            }
+        }
+    } catch (error) {
+        console.error('Error rejecting call:', error);
+        callStatus.textContent = 'Error rejecting call: ' + error.message;
+    }
+
+    endCall();
+}
             } catch (error) {
                 console.error('Error rejecting call:', error);
                 callStatus.textContent = 'Error rejecting call: ' + error.message;
