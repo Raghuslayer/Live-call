@@ -320,6 +320,7 @@
         let isCaller = false;
         let callDoc;
         let callListeners = [];
+        let isMediaStreamInitialized = false;
 
         function showSection(section) {
             console.log(`Showing section: ${section.id}`);
@@ -384,13 +385,17 @@
                 }
 
                 const user = auth.currentUser;
-                await db.collection('users').doc(user.uid).set({
-                    callId: callId,
-                    online: true,
-                    lastSeen: firebase.firestore.FieldValue.serverTimestamp()
-                }, { merge: true });
+                await retryFirestoreOperation(() =>
+                    db.collection('users').doc(user.uid).set({
+                        callId: callId,
+                        online: true,
+                        lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true })
+                );
 
-                await db.collection('callIds').doc(callId).set({ uid: user.uid });
+                await retryFirestoreOperation(() =>
+                    db.collection('callIds').doc(callId).set({ uid: user.uid })
+                );
                 console.log(`CallId ${callId} saved, initializing call section`);
                 myCallId = callId;
                 await initCallSection();
@@ -401,16 +406,17 @@
             }
         }
 
-        function signOut() {
-            auth.signOut().then(() => {
+        async function signOut() {
+            try {
+                await auth.signOut();
                 console.log('Signed out, showing auth section');
-                resetCallState();
+                await resetCallState();
                 showSection(authContainer);
                 authStatus.textContent = 'Signed out successfully';
-            }).catch(error => {
+            } catch (error) {
                 console.error('Sign out error:', error);
                 callStatus.textContent = 'Error signing out';
-            });
+            }
         }
 
         async function resetCallState() {
@@ -436,17 +442,24 @@
             callListeners = [];
             callStatus.textContent = '';
 
-            // Reinitialize localStream for the next call
-            try {
-                await initMediaStream();
-                console.log('Local stream reinitialized after reset');
-            } catch (error) {
-                console.error('Error reinitializing local stream:', error);
-                callStatus.textContent = 'Failed to reinitialize camera/microphone';
+            // Only reinitialize localStream if not in the middle of starting a call
+            if (!isCaller && !targetCallId) {
+                try {
+                    await initMediaStream();
+                    console.log('Local stream reinitialized after reset');
+                } catch (error) {
+                    console.error('Error reinitializing local stream:', error);
+                    callStatus.textContent = 'Failed to reinitialize camera/microphone';
+                }
             }
         }
 
         async function initMediaStream() {
+            if (isMediaStreamInitialized && localStream?.active) {
+                console.log('Media stream already initialized and active');
+                return true;
+            }
+
             try {
                 console.log('Initializing media stream');
                 if (localStream) {
@@ -457,11 +470,13 @@
                 localVideo.srcObject = localStream;
                 localPlaceholder.style.display = 'none';
                 localVideo.style.display = 'block';
+                isMediaStreamInitialized = true;
                 console.log('Media stream initialized:', localStream.getTracks());
                 return true;
             } catch (error) {
                 console.error('Error initializing media stream:', error);
-                callStatus.textContent = 'Could not access camera/microphone. Please grant permissions.';
+                callStatus.textContent = 'Could not access camera/microphone. Please grant permissions or check device availability.';
+                isMediaStreamInitialized = false;
                 return false;
             }
         }
@@ -471,10 +486,12 @@
                 console.log('Initializing call section for callId:', myCallId);
                 myCallIdSpan.textContent = myCallId;
 
-                await db.collection('users').doc(auth.currentUser.uid).set({
-                    online: true,
-                    lastSeen: firebase.firestore.FieldValue.serverTimestamp()
-                }, { merge: true });
+                await retryFirestoreOperation(() =>
+                    db.collection('users').doc(auth.currentUser.uid).set({
+                        online: true,
+                        lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true })
+                );
 
                 await cleanupOldCalls();
 
@@ -506,13 +523,27 @@
         async function cleanupOldCalls() {
             try {
                 const user = auth.currentUser;
-                const calls = await db.collection('users').doc(user.uid).collection('calls').get();
+                const calls = await retryFirestoreOperation(() =>
+                    db.collection('users').doc(user.uid).collection('calls').get()
+                );
                 for (const doc of calls.docs) {
-                    await doc.ref.delete();
+                    await retryFirestoreOperation(() => doc.ref.delete());
                     console.log('Deleted call document:', doc.id);
                 }
             } catch (error) {
                 console.error('Error cleaning up old calls:', error);
+            }
+        }
+
+        async function retryFirestoreOperation(operation, maxAttempts = 3, delay = 1000) {
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    return await operation();
+                } catch (error) {
+                    console.error(`Firestore operation failed (attempt ${attempt}/${maxAttempts}):`, error);
+                    if (attempt === maxAttempts) throw error;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
             }
         }
 
@@ -523,14 +554,18 @@
                 const callTime = callData.timestamp?.toDate();
                 if (callTime && (now - callTime > 60000)) {
                     console.log('Ignoring stale call:', callDocId);
-                    db.collection('users').doc(auth.currentUser.uid).collection('calls').doc(callDocId).delete();
+                    retryFirestoreOperation(() =>
+                        db.collection('users').doc(auth.currentUser.uid).collection('calls').doc(callDocId).delete()
+                    );
                     return;
                 }
                 callerCallId = callData.caller;
                 if (!callerCallId) {
                     console.error('Caller ID is missing in call data:', callData);
                     callStatus.textContent = 'Invalid call: Caller ID missing';
-                    db.collection('users').doc(auth.currentUser.uid).collection('calls').doc(callDocId).delete();
+                    retryFirestoreOperation(() =>
+                        db.collection('users').doc(auth.currentUser.uid).collection('calls').doc(callDocId).delete()
+                    );
                     return;
                 }
                 callerIdSpan.textContent = callerCallId;
@@ -550,11 +585,14 @@
                         setTimeout(() => callStatus.textContent = '', 3000);
                     }
                 }
-                db.collection('users').doc(auth.currentUser.uid).collection('calls').doc(callDocId).delete();
+                retryFirestoreOperation(() =>
+                    db.collection('users').doc(auth.currentUser.uid).collection('calls').doc(callDocId).delete()
+                );
             }
         }
 
         async function startCall() {
+            console.log('Starting call, ensuring media stream is initialized');
             const mediaSuccess = await initMediaStream();
             if (!mediaSuccess) {
                 callStatus.textContent = 'Failed to access camera/microphone';
@@ -575,7 +613,9 @@
             isCaller = true;
 
             try {
-                const targetCallIdDoc = await db.collection('callIds').doc(targetCallId).get();
+                const targetCallIdDoc = await retryFirestoreOperation(() =>
+                    db.collection('callIds').doc(targetCallId).get()
+                );
                 if (!targetCallIdDoc.exists) {
                     callStatus.textContent = 'Call ID not found';
                     return;
@@ -594,7 +634,10 @@
                     status: 'calling',
                     timestamp: firebase.firestore.FieldValue.serverTimestamp()
                 };
-                await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).set(callData);
+                console.log('Attempting to write call notification:', callData);
+                await retryFirestoreOperation(() =>
+                    db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).set(callData)
+                );
                 console.log(`Call notification written to target user: ${targetUid}, callId: ${callDoc.id}`);
 
                 const offerDescription = await peerConnection.createOffer();
@@ -607,7 +650,7 @@
                     callee: targetCallId
                 };
 
-                await callDoc.set({ offer });
+                await retryFirestoreOperation(() => callDoc.set({ offer }));
                 console.log('Offer written to call document:', offer);
 
                 const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
@@ -646,7 +689,9 @@
                 peerConnection.onicecandidate = async event => {
                     if (event.candidate) {
                         console.log('Sending ICE candidate:', event.candidate);
-                        await offerCandidates.add(event.candidate.toJSON());
+                        await retryFirestoreOperation(() =>
+                            offerCandidates.add(event.candidate.toJSON())
+                        );
                     }
                 };
 
@@ -659,10 +704,12 @@
             } catch (error) {
                 console.error('Error starting call:', error);
                 callStatus.textContent = 'Error starting call: ' + error.message;
+                await resetCallState();
             }
         }
 
         async function acceptCall() {
+            console.log('Accepting call, ensuring media stream is initialized');
             const mediaSuccess = await initMediaStream();
             if (!mediaSuccess) {
                 incomingCallAlert.style.display = 'none';
@@ -681,12 +728,12 @@
                 console.log('Attempting to accept call with doc ID:', callDocId);
 
                 const callDocRef = db.collection('users').doc(user.uid).collection('calls').doc(callDocId);
-                const callDocSnap = await callDocRef.get();
+                const callDocSnap = await retryFirestoreOperation(() => callDocRef.get());
 
                 if (!callDocSnap.exists) {
                     console.error('Call document not found:', callDocId);
                     callStatus.textContent = 'Call no longer exists';
-                    await callDocRef.delete();
+                    await retryFirestoreOperation(() => callDocRef.delete());
                     return;
                 }
 
@@ -697,10 +744,12 @@
                 const offerCandidates = callDoc.collection('offerCandidates');
                 const answerCandidates = callDoc.collection('answerCandidates');
 
-                await callDocRef.update({
-                    status: 'answered',
-                    answeredAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
+                await retryFirestoreOperation(() =>
+                    callDocRef.update({
+                        status: 'answered',
+                        answeredAt: firebase.firestore.FieldValue.serverTimestamp()
+                    })
+                );
                 console.log('Call marked as answered');
 
                 const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
@@ -719,13 +768,13 @@
                             sdp: answerDescription.sdp
                         };
 
-                        await callDoc.update({ answer });
+                        await retryFirestoreOperation(() => callDoc.update({ answer }));
                         console.log('Answer sent to call document:', answer);
 
                         callStatus.textContent = `Connected with ${callerCallId}`;
                         endCallBtn.style.display = 'block';
 
-                        await callDocRef.delete();
+                        await retryFirestoreOperation(() => callDocRef.delete());
                         console.log('Call notification deleted after connection');
                     }
                     if (data?.status === 'ended') {
@@ -755,12 +804,15 @@
                 peerConnection.onicecandidate = async event => {
                     if (event.candidate) {
                         console.log('Sending answer ICE candidate:', event.candidate);
-                        await answerCandidates.add(event.candidate.toJSON());
+                        await retryFirestoreOperation(() =>
+                            answerCandidates.add(event.candidate.toJSON())
+                        );
                     }
                 };
             } catch (error) {
                 console.error('Error accepting call:', error);
                 callStatus.textContent = 'Error accepting call: ' + error.message;
+                await resetCallState();
             }
         }
 
@@ -775,14 +827,18 @@
                 console.log('Rejecting call with doc ID:', callDocId);
 
                 const callDocRef = db.collection('users').doc(user.uid).collection('calls').doc(callDocId);
-                await callDocRef.delete();
+                await retryFirestoreOperation(() => callDocRef.delete());
                 console.log('Call notification deleted');
 
                 if (callerCallId && callDoc) {
-                    const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
+                    const callerCallIdDoc = await retryFirestoreOperation(() =>
+                        db.collection('callIds').doc(callerCallId).get()
+                    );
                     if (callerCallIdDoc.exists) {
                         const callerUid = callerCallIdDoc.data().uid;
-                        await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).delete();
+                        await retryFirestoreOperation(() =>
+                            db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).delete()
+                        );
                         console.log('Caller’s call notification deleted');
                     }
                 }
@@ -791,7 +847,7 @@
                 callStatus.textContent = 'Error rejecting call: ' + error.message;
             }
 
-            endCall();
+            await resetCallState();
         }
 
         async function endCall() {
@@ -808,41 +864,57 @@
             try {
                 const user = auth.currentUser;
                 if (isCaller && targetCallId && callDoc) {
-                    const targetCallIdDoc = await db.collection('callIds').doc(targetCallId).get();
+                    const targetCallIdDoc = await retryFirestoreOperation(() =>
+                        db.collection('callIds').doc(targetCallId).get()
+                    );
                     if (targetCallIdDoc.exists) {
                         const targetUid = targetCallIdDoc.data().uid;
-                        await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).delete();
+                        await retryFirestoreOperation(() =>
+                            db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).delete()
+                        );
                         console.log('Target user’s call notification deleted');
                     }
-                    await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).delete();
+                    await retryFirestoreOperation(() =>
+                        db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).delete()
+                    );
                     console.log('Caller’s call notification deleted');
-                    await callDoc.update({ status: 'ended', endedAt: firebase.firestore.FieldValue.serverTimestamp() });
+                    await retryFirestoreOperation(() =>
+                        callDoc.update({ status: 'ended', endedAt: firebase.firestore.FieldValue.serverTimestamp() })
+                    );
                 } else if (callerCallId && callDoc) {
-                    const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
+                    const callerCallIdDoc = await retryFirestoreOperation(() =>
+                        db.collection('callIds').doc(callerCallId).get()
+                    );
                     if (callerCallIdDoc.exists) {
                         const callerUid = callerCallIdDoc.data().uid;
-                        await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).delete();
+                        await retryFirestoreOperation(() =>
+                            db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).delete()
+                        );
                         console.log('Caller’s call notification deleted');
                     }
-                    await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).delete();
+                    await retryFirestoreOperation(() =>
+                        db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).delete()
+                    );
                     console.log('Callee’s call notification deleted');
-                    await callDoc.update({ status: 'ended', endedAt: firebase.firestore.FieldValue.serverTimestamp() });
+                    await retryFirestoreOperation(() =>
+                        callDoc.update({ status: 'ended', endedAt: firebase.firestore.FieldValue.serverTimestamp() })
+                    );
                 }
             } catch (error) {
                 console.error('Error ending call:', error);
                 callStatus.textContent = 'Error ending call: ' + error.message;
             }
 
-            resetCallState();
+            await resetCallState();
             callStatus.textContent = 'Call ended';
             setTimeout(() => callStatus.textContent = '', 3000);
         }
 
         async function createPeerConnection() {
-            if (!localStream) {
-                console.log('Local stream not available, initializing...');
+            if (!localStream || !localStream.active) {
+                console.log('Local stream not available or inactive, initializing...');
                 const mediaSuccess = await initMediaStream();
-                if (!mediaSuccess) {
+                if (!mediaSuccess || !localStream) {
                     callStatus.textContent = 'Cannot start call: Camera/microphone not available';
                     throw new Error('Failed to initialize media stream');
                 }
@@ -936,7 +1008,9 @@
                 console.log('Checking user data in Firestore...');
                 try {
                     await new Promise(resolve => setTimeout(resolve, 500));
-                    const userDoc = await db.collection('users').doc(user.uid).get();
+                    const userDoc = await retryFirestoreOperation(() =>
+                        db.collection('users').doc(user.uid).get()
+                    );
                     console.log('Firestore query completed, exists:', userDoc.exists, 'data:', userDoc.data());
 
                     if (userDoc.exists && userDoc.data().callId) {
@@ -956,7 +1030,7 @@
                 }
             } else {
                 console.log('No user, showing auth section');
-                resetCallState();
+                await resetCallState();
                 showSection(authContainer);
                 authStatus.textContent = '';
             }
@@ -966,12 +1040,14 @@
             try {
                 const user = auth.currentUser;
                 if (user) {
-                    await db.collection('users').doc(user.uid).update({
-                        online: false,
-                        lastSeen: firebase.firestore.FieldValue.serverTimestamp()
-                    });
+                    await retryFirestoreOperation(() =>
+                        db.collection('users').doc(user.uid).update({
+                            online: false,
+                            lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+                        })
+                    );
                 }
-                resetCallState();
+                await resetCallState();
             } catch (error) {
                 console.error('Error during cleanup:', error);
             }
