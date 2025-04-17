@@ -98,7 +98,7 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
 
     <script>
-        // Firebase Config
+        // Firebase Config (Replace with your project config)
 const firebaseConfig = {
   apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
   authDomain: "live-call-33ea7.firebaseapp.com",
@@ -150,7 +150,7 @@ const firebaseConfig = {
                 }, { merge: true });
 
                 await db.collection('callIds').doc(callId).set({ uid: user.uid });
-                console.log('CallId saved, redirecting to call.html');
+                console.log(`CallId ${callId} saved, redirecting to call.html`);
                 window.location.href = 'call.html';
             } catch (error) {
                 console.error('Error saving callId:', error);
