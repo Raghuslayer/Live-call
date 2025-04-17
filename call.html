@@ -218,8 +218,8 @@
     <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
 
     <script>
-        // Firebase Config
-const firebaseConfig = {
+        // Firebase Config (Replace with your project config)
+       const firebaseConfig = {
   apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
   authDomain: "live-call-33ea7.firebaseapp.com",
   projectId: "live-call-33ea7",
@@ -227,6 +227,7 @@ const firebaseConfig = {
   messagingSenderId: "518167322129",
   appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
 };
+
 
         firebase.initializeApp(firebaseConfig);
         const auth = firebase.auth();
@@ -258,7 +259,10 @@ const firebaseConfig = {
         // Sign out
         function signOut() {
             auth.signOut().then(() => {
+                console.log('Signed out, redirecting to index.html');
                 window.location.href = 'index.html';
+            }).catch(error => {
+                console.error('Sign out error:', error);
             });
         }
 
@@ -296,8 +300,8 @@ const firebaseConfig = {
             try {
                 const userDoc = await db.collection('users').doc(user.uid).get();
                 if (!userDoc.exists || !userDoc.data().callId) {
-                    console.log('No callId, redirecting to callid.html');
-                    window.location.href = 'callid.html';
+                    console.log('No callId found for user, showing error');
+                    statusDiv.textContent = 'No Call ID found. Please create one.';
                     return;
                 }
 
@@ -331,7 +335,7 @@ const firebaseConfig = {
                 }
             } catch (error) {
                 console.error('Error initializing:', error);
-                statusDiv.textContent = 'Error loading user data. Please try logging in again.';
+                statusDiv.textContent = 'Error loading user data. Please sign out and try again.';
             }
         }
 
