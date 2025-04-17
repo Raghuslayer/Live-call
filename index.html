@@ -160,15 +160,15 @@
     <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
 
     <script>
-        // Firebase Config (Replace with your config)
-const firebaseConfig = {
-  apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
-  authDomain: "live-call-33ea7.firebaseapp.com",
-  projectId: "live-call-33ea7",
-  storageBucket: "live-call-33ea7.firebasestorage.app",
-  messagingSenderId: "518167322129",
-  appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
-};
+        // Firebase Config
+        const firebaseConfig = {
+            apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
+            authDomain: "live-call-33ea7.firebaseapp.com",
+            projectId: "live-call-33ea7",
+            storageBucket: "live-call-33ea7.firebasestorage.app",
+            messagingSenderId: "518167322129",
+            appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
+        };
 
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
@@ -192,13 +192,13 @@ const firebaseConfig = {
         let callerCode;
         let isCaller = false;
         let callDoc;
-        let answerDoc;
+        let mediaInitialized = false;
 
         // Generate unique code (4-10 characters)
         function generateCode() {
             const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
             let result = '';
-            const length = Math.floor(Math.random() * 7) + 4; // 4-10 characters
+            const length = Math.floor(Math.random() * 7) + 4;
             for (let i = 0; i < length; i++) {
                 result += chars.charAt(Math.floor(Math.random() * chars.length));
             }
@@ -207,17 +207,14 @@ const firebaseConfig = {
 
         // Initialize the application
         async function init() {
-            // Generate and display user code
             myCode = generateCode();
             document.getElementById('myCode').textContent = myCode;
-            
-            // Save user to Firestore
+
             await db.collection('users').doc(myCode).set({
                 online: true,
                 lastSeen: firebase.firestore.FieldValue.serverTimestamp()
             });
 
-            // Set up listener for incoming calls
             db.collection('users').doc(myCode).collection('calls').onSnapshot(snapshot => {
                 snapshot.docChanges().forEach(change => {
                     if (change.type === 'added') {
@@ -226,15 +223,16 @@ const firebaseConfig = {
                 });
             });
 
-            // Request camera and microphone access
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 localVideo.srcObject = localStream;
                 localPlaceholder.style.display = 'none';
                 localVideo.style.display = 'block';
+                mediaInitialized = true;
             } catch (error) {
                 console.error('Error accessing media devices:', error);
-                statusDiv.textContent = 'Could not access camera/microphone';
+                statusDiv.textContent = 'Could not access camera/microphone. Please grant permissions and refresh.';
+                mediaInitialized = false;
             }
         }
 
@@ -256,6 +254,11 @@ const firebaseConfig = {
 
         // Start a call
         async function startCall() {
+            if (!mediaInitialized) {
+                statusDiv.textContent = 'Camera/microphone not initialized. Please refresh and allow permissions.';
+                return;
+            }
+
             targetCode = document.getElementById('targetCode').value.trim();
             if (!targetCode) {
                 statusDiv.textContent = 'Please enter a code to call';
@@ -269,22 +272,18 @@ const firebaseConfig = {
             statusDiv.textContent = `Calling ${targetCode}...`;
             isCaller = true;
 
-            // Check if target user exists
             const targetUser = await db.collection('users').doc(targetCode).get();
             if (!targetUser.exists) {
                 statusDiv.textContent = 'User not found';
                 return;
             }
 
-            // Create peer connection
             await createPeerConnection();
 
-            // Create call document
             callDoc = db.collection('calls').doc();
             const offerCandidates = callDoc.collection('offerCandidates');
             const answerCandidates = callDoc.collection('answerCandidates');
 
-            // Notify the callee
             await db.collection('users').doc(targetCode).collection('calls').doc(callDoc.id).set({
                 caller: myCode,
                 callId: callDoc.id,
@@ -292,7 +291,6 @@ const firebaseConfig = {
                 timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
 
-            // Create offer
             const offerDescription = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offerDescription);
 
@@ -305,7 +303,6 @@ const firebaseConfig = {
 
             await callDoc.set({ offer });
 
-            // Listen for answer
             callDoc.onSnapshot(async snapshot => {
                 const data = snapshot.data();
                 if (!peerConnection.currentRemoteDescription && data?.answer) {
@@ -316,7 +313,6 @@ const firebaseConfig = {
                 }
             });
 
-            // Listen for remote ICE candidates
             answerCandidates.onSnapshot(snapshot => {
                 snapshot.docChanges().forEach(async change => {
                     if (change.type === 'added') {
@@ -326,7 +322,6 @@ const firebaseConfig = {
                 });
             });
 
-            // Gather ICE candidates
             peerConnection.onicecandidate = async event => {
                 if (event.candidate) {
                     await offerCandidates.add(event.candidate.toJSON());
@@ -336,40 +331,42 @@ const firebaseConfig = {
 
         // Accept incoming call
         async function acceptCall() {
+            if (!mediaInitialized) {
+                statusDiv.textContent = 'Camera/microphone not initialized. Please refresh and allow permissions.';
+                incomingCallAlert.style.display = 'none';
+                return;
+            }
+
             incomingCallAlert.style.display = 'none';
             statusDiv.textContent = `Connecting with ${callerCode}...`;
-            
+
             await createPeerConnection();
-            
-            // Get the call document
+
             const callQuery = await db.collection('users').doc(myCode).collection('calls')
                 .where('caller', '==', callerCode)
                 .where('status', '==', 'calling')
                 .get();
-                
+
             if (callQuery.empty) {
                 statusDiv.textContent = 'Call no longer exists';
                 return;
             }
-            
+
             const callData = callQuery.docs[0].data();
             callDoc = db.collection('calls').doc(callData.callId);
             const offerCandidates = callDoc.collection('offerCandidates');
             const answerCandidates = callDoc.collection('answerCandidates');
 
-            // Update call status
             await db.collection('users').doc(myCode).collection('calls').doc(callDoc.id).update({
                 status: 'answered'
             });
 
-            // Listen for offer
             callDoc.onSnapshot(async snapshot => {
                 const data = snapshot.data();
                 if (!peerConnection.currentRemoteDescription && data?.offer) {
                     const offerDescription = data.offer;
                     await peerConnection.setRemoteDescription(new RTCSessionDescription(offerDescription));
 
-                    // Create answer
                     const answerDescription = await peerConnection.createAnswer();
                     await peerConnection.setLocalDescription(answerDescription);
 
@@ -385,7 +382,6 @@ const firebaseConfig = {
                 }
             });
 
-            // Listen for ICE candidates from caller
             offerCandidates.onSnapshot(snapshot => {
                 snapshot.docChanges().forEach(async change => {
                     if (change.type === 'added') {
@@ -394,7 +390,6 @@ const firebaseConfig = {
                 });
             });
 
-            // Gather ICE candidates
             peerConnection.onicecandidate = async event => {
                 if (event.candidate) {
                     await answerCandidates.add(event.candidate.toJSON());
@@ -407,13 +402,12 @@ const firebaseConfig = {
             incomingCallAlert.style.display = 'none';
             statusDiv.textContent = 'Call rejected';
             setTimeout(() => statusDiv.textContent = '', 3000);
-            
-            // Update call status
+
             const callQuery = await db.collection('users').doc(myCode).collection('calls')
                 .where('caller', '==', callerCode)
                 .where('status', '==', 'calling')
                 .get();
-                
+
             if (!callQuery.empty) {
                 await db.collection('users').doc(myCode).collection('calls').doc(callQuery.docs[0].id).update({
                     status: 'rejected'
@@ -427,20 +421,17 @@ const firebaseConfig = {
                 peerConnection.close();
                 peerConnection = null;
             }
-            
-            if (isCaller) {
-                // Notify callee that call ended
+
+            if (isCaller && targetCode) {
                 await db.collection('users').doc(targetCode).collection('calls').doc(callDoc.id).update({
                     status: 'ended'
                 });
-            } else {
-                // Notify caller that call ended
+            } else if (callerCode) {
                 await db.collection('users').doc(callerCode).collection('calls').doc(callDoc.id).update({
                     status: 'ended'
                 });
             }
-            
-            // Clean up UI
+
             remoteVideo.srcObject = null;
             remotePlaceholder.style.display = 'block';
             remoteVideo.style.display = 'none';
@@ -465,19 +456,24 @@ const firebaseConfig = {
             remotePlaceholder.style.display = 'none';
             remoteVideo.style.display = 'block';
 
-            // Add local stream tracks
-            localStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, localStream);
-            });
-
-            // Handle remote stream
-            peerConnection.ontrack = event => {
-                event.streams[0].getTracks().forEach(track => {
-                    remoteStream.addTrack(track);
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
                 });
+            } else {
+                console.error('Local stream is not available');
+                statusDiv.textContent = 'Cannot start call: Camera/microphone not available';
+                return;
+            }
+
+            peerConnection.ontrack = event => {
+                if (event.streams[0]) {
+                    event.streams[0].getTracks().forEach(track => {
+                        remoteStream.addTrack(track);
+                    });
+                }
             };
 
-            // Handle connection state changes
             peerConnection.onconnectionstatechange = () => {
                 if (peerConnection.connectionState === 'disconnected' || 
                     peerConnection.connectionState === 'failed') {
@@ -488,6 +484,7 @@ const firebaseConfig = {
 
         // Toggle camera
         function toggleCamera() {
+            if (!localStream) return;
             const videoTrack = localStream.getVideoTracks()[0];
             if (videoTrack) {
                 videoTrack.enabled = !videoTrack.enabled;
@@ -498,6 +495,7 @@ const firebaseConfig = {
 
         // Toggle microphone
         function toggleMic() {
+            if (!localStream) return;
             const audioTrack = localStream.getAudioTracks()[0];
             if (audioTrack) {
                 audioTrack.enabled = !audioTrack.enabled;
