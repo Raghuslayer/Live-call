@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VideoCall Pro - Create Call ID</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Poppins', sans-serif;
+        }
+
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+
+        .callid-container {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(10px);
+            text-align: center;
+        }
+
+        h2 {
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            border-radius: 25px;
+            border: none;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            font-size: 16px;
+        }
+
+        input::placeholder {
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        button {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 25px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 16px;
+        }
+
+        button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        button:active {
+            transform: scale(0.95);
+        }
+
+        .status {
+            margin-top: 20px;
+            min-height: 24px;
+            color: #ff4d4d;
+        }
+    </style>
+</head>
+<body>
+    <div class="callid-container">
+        <h2>Create Your Call ID</h2>
+        <div class="form-group">
+            <input type="text" id="callIdInput" placeholder="Enter unique Call ID (e.g., raghu123)" required>
+        </div>
+        <button onclick="saveCallId()">Save Call ID</button>
+        <div class="status" id="status"></div>
+    </div>
+
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
+
+    <script>
+        // Firebase Config
+        const firebaseConfig = {
+            apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
+            authDomain: "live-call-33ea7.firebaseapp.com",
+            projectId: "live-call-33ea7",
+            storageBucket: "live-call-33ea7.firebasestorage.app",
+            messagingSenderId: "518167322129",
+            appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        // DOM Elements
+        const callIdInput = document.getElementById('callIdInput');
+        const statusDiv = document.getElementById('status');
+
+        // Check for existing callId
+        auth.onAuthStateChanged(async user => {
+            if (!user) {
+                window.location.href = 'index.html';
+                return;
+            }
+
+            const userDoc = await db.collection('users').doc(user.uid).get();
+            if (userDoc.exists && userDoc.data().callId) {
+                window.location.href = 'call.html';
+            }
+        });
+
+        // Save callId
+        async function saveCallId() {
+            const callId = callIdInput.value.trim();
+            statusDiv.textContent = '';
+
+            if (!callId || callId.length < 4) {
+                statusDiv.textContent = 'Call ID must be at least 4 characters';
+                return;
+            }
+
+            try {
+                const callIdDoc = await db.collection('callIds').doc(callId).get();
+                if (callIdDoc.exists) {
+                    statusDiv.textContent = 'Call ID already taken, please choose another';
+                    return;
+                }
+
+                const user = auth.currentUser;
+                await db.collection('users').doc(user.uid).set({
+                    callId: callId,
+                    online: true,
+                    lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+
+                await db.collection('callIds').doc(callId).set({ uid: user.uid });
+                window.location.href = 'call.html';
+            } catch (error) {
+                statusDiv.textContent = error.message;
+            }
+        }
+    </script>
+</body>
+</html>
