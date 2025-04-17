@@ -99,14 +99,15 @@
 
     <script>
         // Firebase Config
-        const firebaseConfig = {
-            apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
-            authDomain: "live-call-33ea7.firebaseapp.com",
-            projectId: "live-call-33ea7",
-            storageBucket: "live-call-33ea7.firebasestorage.app",
-            messagingSenderId: "518167322129",
-            appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
-        };
+const firebaseConfig = {
+  apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
+  authDomain: "live-call-33ea7.firebaseapp.com",
+  projectId: "live-call-33ea7",
+  storageBucket: "live-call-33ea7.firebasestorage.app",
+  messagingSenderId: "518167322129",
+  appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
+};
+
 
         firebase.initializeApp(firebaseConfig);
         const auth = firebase.auth();
@@ -116,16 +117,11 @@
         const callIdInput = document.getElementById('callIdInput');
         const statusDiv = document.getElementById('status');
 
-        // Check for existing callId
-        auth.onAuthStateChanged(async user => {
+        // Check authentication state
+        auth.onAuthStateChanged(user => {
             if (!user) {
+                console.log('No user, redirecting to index.html');
                 window.location.href = 'index.html';
-                return;
-            }
-
-            const userDoc = await db.collection('users').doc(user.uid).get();
-            if (userDoc.exists && userDoc.data().callId) {
-                window.location.href = 'call.html';
             }
         });
 
@@ -154,8 +150,10 @@
                 }, { merge: true });
 
                 await db.collection('callIds').doc(callId).set({ uid: user.uid });
+                console.log('CallId saved, redirecting to call.html');
                 window.location.href = 'call.html';
             } catch (error) {
+                console.error('Error saving callId:', error);
                 statusDiv.textContent = error.message;
             }
         }
