@@ -426,7 +426,6 @@
             console.log('Resetting call state, isCallActive:', isCallActive);
             isCallActive = false;
 
-            // Close and nullify WebRTC resources
             if (peerConnection) {
                 try {
                     peerConnection.close();
@@ -454,7 +453,6 @@
                 console.log('Local stream stopped');
             }
 
-            // Reset UI elements
             remoteVideo.srcObject = null;
             localVideo.srcObject = null;
             remotePlaceholder.style.display = 'block';
@@ -469,7 +467,6 @@
             callDoc = null;
             pendingIceCandidates = [];
 
-            // Unsubscribe all listeners
             console.log('Unsubscribing listeners, count:', callListeners.length);
             while (callListeners.length > 0) {
                 const unsubscribe = callListeners.pop();
@@ -484,13 +481,7 @@
             try {
                 await cleanupOldCalls();
                 console.log('Firestore cleanup completed');
-                // Delay to ensure Firestore operations complete
                 await new Promise(resolve => setTimeout(resolve, 100));
-                // Reinitialize media stream
-                const mediaSuccess = await initMediaStream();
-                if (!mediaSuccess) {
-                    callStatus.textContent = 'Failed to reinitialize camera/microphone. Please grant permissions.';
-                }
             } catch (error) {
                 console.error('Error during state reset:', error);
                 callStatus.textContent = 'Error resetting state: ' + error.message;
@@ -674,10 +665,6 @@
                 callStatus.textContent = 'Another call is active. Please end the current call first.';
                 return;
             }
-            if (callListeners.length > 1) {
-                console.warn('Multiple listeners detected, resetting state');
-                await resetCallState();
-            }
             isCallActive = true;
 
             console.log('Starting call');
@@ -757,7 +744,9 @@
                         await peerConnection.setRemoteDescription(answerDescription);
                         console.log('Remote description set, applying ICE candidates');
                         for (const candidate of pendingIceCandidates) {
-                            await retryIceCandidateAddition(candidate);
+                            await peerConnection.addIceCandidate(candidate).catch(error => {
+                                console.error('Error applying ICE candidate:', error);
+                            });
                         }
                         pendingIceCandidates = [];
                         callStatus.textContent = `Connected with ${targetCallId}`;
@@ -779,7 +768,9 @@
                             const candidate = new RTCIceCandidate(change.doc.data());
                             console.log('Received answer candidate:', candidate);
                             if (peerConnection.currentRemoteDescription) {
-                                await retryIceCandidateAddition(candidate);
+                                await peerConnection.addIceCandidate(candidate).catch(error => {
+                                    console.error('Error adding ICE candidate:', error);
+                                });
                             } else {
                                 pendingIceCandidates.push(candidate);
                                 console.log('Buffered ICE candidate:', candidate);
@@ -814,31 +805,11 @@
             }
         }
 
-        async function retryIceCandidateAddition(candidate) {
-            for (let attempt = 1; attempt <= 3; attempt++) {
-                try {
-                    await peerConnection.addIceCandidate(candidate);
-                    console.log('ICE candidate added successfully:', candidate);
-                    return;
-                } catch (error) {
-                    console.error(`Error adding ICE candidate (attempt ${attempt}/3):`, error);
-                    if (attempt === 3) {
-                        console.warn('Failed to add ICE candidate after retries:', candidate);
-                    }
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                }
-            }
-        }
-
         async function acceptCall() {
             if (isCallActive) {
                 callStatus.textContent = 'Another call is active. Please end the current call first.';
                 incomingCallAlert.style.display = 'none';
                 return;
-            }
-            if (callListeners.length > 1) {
-                console.warn('Multiple listeners detected, resetting state');
-                await resetCallState();
             }
             isCallActive = true;
 
@@ -909,7 +880,9 @@
                         console.log('Answer sent to call document:', answer);
 
                         for (const candidate of pendingIceCandidates) {
-                            await retryIceCandidateAddition(candidate);
+                            await peerConnection.addIceCandidate(candidate).catch(error => {
+                                console.error('Error applying ICE candidate:', error);
+                            });
                         }
                         pendingIceCandidates = [];
 
@@ -935,7 +908,9 @@
                             const candidate = new RTCIceCandidate(change.doc.data());
                             console.log('Received offer candidate:', candidate);
                             if (peerConnection.currentRemoteDescription) {
-                                await retryIceCandidateAddition(candidate);
+                                await peerConnection.addIceCandidate(candidate).catch(error => {
+                                    console.error('Error adding ICE candidate:', error);
+                                });
                             } else {
                                 pendingIceCandidates.push(candidate);
                                 console.log('Buffered ICE candidate:', candidate);
@@ -999,7 +974,7 @@
         }
 
         async function endCall() {
-            console.log('Ending call');
+            console.log('Ending call, isCaller:', isCaller);
             isCallActive = false;
 
             if (peerConnection) {
@@ -1022,6 +997,26 @@
 
             try {
                 const user = auth.currentUser;
+                if (callDoc) {
+                    const offerCandidates = callDoc.collection('offerCandidates');
+                    const answerCandidates = callDoc.collection('answerCandidates');
+                    const [offerSnapshot, answerSnapshot] = await Promise.all([
+                        retryFirestoreOperation(() => offerCandidates.get()),
+                        retryFirestoreOperation(() => answerCandidates.get())
+                    ]);
+                    await Promise.all([
+                        ...offerSnapshot.docs.map(doc => retryFirestoreOperation(() => doc.ref.delete())),
+                        ...answerSnapshot.docs.map(doc => retryFirestoreOperation(() => doc.ref.delete()))
+                    ]);
+                    console.log('Offer and answer candidates deleted');
+
+                    await retryFirestoreOperation(() =>
+                        callDoc.update({ status: 'ended', endedAt: firebase.firestore.FieldValue.serverTimestamp() })
+                    );
+                    await retryFirestoreOperation(() => callDoc.delete());
+                    console.log('Call document deleted:', callDoc.id);
+                }
+
                 if (isCaller && targetCallId && callDoc) {
                     const targetCallIdDoc = await retryFirestoreOperation(() =>
                         db.collection('callIds').doc(targetCallId).get()
@@ -1037,9 +1032,6 @@
                         db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).delete()
                     );
                     console.log('Caller’s call notification deleted');
-                    await retryFirestoreOperation(() =>
-                        callDoc.update({ status: 'ended', endedAt: firebase.firestore.FieldValue.serverTimestamp() })
-                    );
                 } else if (callerCallId && callDoc) {
                     const callerCallIdDoc = await retryFirestoreOperation(() =>
                         db.collection('callIds').doc(callerCallId).get()
@@ -1055,33 +1047,27 @@
                         db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).delete()
                     );
                     console.log('Callee’s call notification deleted');
-                    await retryFirestoreOperation(() =>
-                        callDoc.update({ status: 'ended', endedAt: firebase.firestore.FieldValue.serverTimestamp() })
-                    );
                 }
 
-                if (callDoc) {
-                    const offerCandidates = callDoc.collection('offerCandidates');
-                    const answerCandidates = callDoc.collection('answerCandidates');
-                    const [offerSnapshot, answerSnapshot] = await Promise.all([
-                        retryFirestoreOperation(() => offerCandidates.get()),
-                        retryFirestoreOperation(() => answerCandidates.get())
-                    ]);
-                    await Promise.all([
-                        ...offerSnapshot.docs.map(doc => retryFirestoreOperation(() => doc.ref.delete())),
-                        ...answerSnapshot.docs.map(doc => retryFirestoreOperation(() => doc.ref.delete())),
-                        retryFirestoreOperation(() => callDoc.delete())
-                    ]);
-                    console.log('Call document and candidates cleaned up');
+                await resetCallState();
+                callStatus.textContent = 'Call ended';
+                setTimeout(() => callStatus.textContent = '', 3000);
+
+                if (isCaller) {
+                    console.log('Caller ended call, refreshing tab');
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    window.location.reload();
                 }
             } catch (error) {
                 console.error('Error ending call:', error);
                 callStatus.textContent = 'Error ending call: ' + error.message;
+                await resetCallState();
+                if (isCaller) {
+                    console.log('Caller ended call with error, refreshing tab');
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    window.location.reload();
+                }
             }
-
-            await resetCallState();
-            callStatus.textContent = 'Call ended';
-            setTimeout(() => callStatus.textContent = '', 3000);
         }
 
         async function createPeerConnection() {
@@ -1162,76 +1148,18 @@
                 console.log('Connection state:', peerConnection.connectionState);
                 if (peerConnection.connectionState === 'disconnected' || 
                     peerConnection.connectionState === 'failed') {
-                    console.log('Connection failed or disconnected, attempting recovery');
-                    try {
-                        await peerConnection.restartIce();
-                        console.log('ICE restart initiated');
-                    } catch (error) {
-                        console.error('Error restarting ICE:', error);
-                        callStatus.textContent = 'Connection lost';
-                        endCall();
-                    }
-                } else if (peerConnection.connectionState === 'connected') {
-                    console.log('Peer connection established successfully');
-                    setTimeout(async () => {
-                        if (remoteStream.getTracks().length === 0) {
-                            console.warn('No remote tracks after connection, triggering renegotiation');
-                            if (isCaller && peerConnection.signalingState === 'stable') {
-                                const offer = await peerConnection.createOffer();
-                                await peerConnection.setLocalDescription(offer);
-                                await retryFirestoreOperation(() =>
-                                    callDoc.update({
-                                        offer: {
-                                            sdp: offer.sdp,
-                                            type: offer.type,
-                                            caller: myCallId,
-                                            callee: targetCallId
-                                        }
-                                    })
-                                );
-                                console.log('Renegotiation offer sent');
-                            }
-                        }
-                    }, 2000);
+                    console.log('Connection failed or disconnected, ending call');
+                    callStatus.textContent = 'Connection lost';
+                    endCall();
                 }
             };
 
             peerConnection.oniceconnectionstatechange = async () => {
                 console.log('ICE connection state:', peerConnection.iceConnectionState);
                 if (peerConnection.iceConnectionState === 'failed') {
-                    console.log('ICE connection failed, restarting ICE');
-                    try {
-                        await peerConnection.restartIce();
-                        console.log('ICE restart initiated');
-                    } catch (error) {
-                        console.error('Error restarting ICE:', error);
-                        callStatus.textContent = 'ICE connection failed';
-                        endCall();
-                    }
-                }
-            };
-
-            peerConnection.onnegotiationneeded = async () => {
-                if (isCaller && peerConnection.signalingState === 'stable') {
-                    console.log('Negotiation needed, creating new offer');
-                    try {
-                        const offer = await peerConnection.createOffer();
-                        await peerConnection.setLocalDescription(offer);
-                        await retryFirestoreOperation(() =>
-                            callDoc.update({
-                                offer: {
-                                    sdp: offer.sdp,
-                                    type: offer.type,
-                                    caller: myCallId,
-                                    callee: targetCallId
-                                }
-                            })
-                        );
-                        console.log('New offer sent for renegotiation');
-                    } catch (error) {
-                        console.error('Error during renegotiation:', error);
-                        callStatus.textContent = 'Error renegotiating connection';
-                    }
+                    console.log('ICE connection failed, ending call');
+                    callStatus.textContent = 'ICE connection failed';
+                    endCall();
                 }
             };
         }
@@ -1248,23 +1176,6 @@
                 document.getElementById('toggleCam').textContent = 
                     videoTrack.enabled ? 'Camera Off' : 'Camera On';
                 console.log('Camera toggled:', videoTrack.enabled ? 'On' : 'Off');
-                if (peerConnection && peerConnection.connectionState === 'connected' && isCaller) {
-                    peerConnection.createOffer().then(offer => {
-                        peerConnection.setLocalDescription(offer);
-                        retryFirestoreOperation(() =>
-                            callDoc.update({
-                                offer: {
-                                    sdp: offer.sdp,
-                                    type: offer.type,
-                                    caller: myCallId,
-                                    callee: targetCallId
-                                }
-                            })
-                        );
-                    }).catch(error => {
-                        console.error('Error triggering renegotiation for camera toggle:', error);
-                    });
-                }
             }
         }
 
@@ -1280,23 +1191,6 @@
                 document.getElementById('toggleMic').textContent = 
                     audioTrack.enabled ? 'Mic Off' : 'Mic On';
                 console.log('Microphone toggled:', audioTrack.enabled ? 'On' : 'Off');
-                if (peerConnection && peerConnection.connectionState === 'connected' && isCaller) {
-                    peerConnection.createOffer().then(offer => {
-                        peerConnection.setLocalDescription(offer);
-                        retryFirestoreOperation(() =>
-                            callDoc.update({
-                                offer: {
-                                    sdp: offer.sdp,
-                                    type: offer.type,
-                                    caller: myCallId,
-                                    callee: targetCallId
-                                }
-                            })
-                        );
-                    }).catch(error => {
-                        console.error('Error triggering renegotiation for mic toggle:', error);
-                    });
-                }
             }
         }
 
