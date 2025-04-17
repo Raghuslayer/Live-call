@@ -799,11 +799,7 @@ async function rejectCall() {
 
     endCall();
 }
-             catch (error) {
-                console.error('Error rejecting call:', error);
-                callStatus.textContent = 'Error rejecting call: ' + error.message;
-            }
-        }
+          
 
         async function endCall() {
             console.log('Ending call');
