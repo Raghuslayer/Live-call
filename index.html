@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VideoCall Pro</title>
+    <title>VideoCall Pro - Login</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
     <style>
         * {
@@ -16,53 +16,43 @@
         body {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            color: white;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-
-        .video-container {
-            display: flex;
-            gap: 20px;
-            margin-top: 40px;
-        }
-
-        .video-box {
-            flex: 1;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 15px;
-            padding: 15px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            backdrop-filter: blur(10px);
-            min-height: 400px;
             display: flex;
             align-items: center;
             justify-content: center;
+            color: white;
         }
 
-        video {
+        .auth-container {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 40px;
             width: 100%;
-            border-radius: 10px;
-            transform: scaleX(-1);
-            max-height: 400px;
-            object-fit: cover;
-        }
-
-        .placeholder {
+            max-width: 400px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(10px);
             text-align: center;
-            color: rgba(255, 255, 255, 0.7);
         }
 
-        .controls {
-            display: flex;
-            justify-content: center;
-            gap: 15px;
-            margin-top: 20px;
-            flex-wrap: wrap;
+        h2 {
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            border-radius: 25px;
+            border: none;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            font-size: 16px;
+        }
+
+        input::placeholder {
+            color: rgba(255, 255, 255, 0.7);
         }
 
         button {
@@ -73,7 +63,6 @@
             color: white;
             cursor: pointer;
             transition: all 0.3s ease;
-            backdrop-filter: blur(5px);
             font-size: 16px;
         }
 
@@ -86,134 +75,39 @@
             transform: scale(0.95);
         }
 
-        .code-section {
-            text-align: center;
-            margin-top: 40px;
-        }
-
-        input {
-            padding: 12px;
-            border-radius: 25px;
-            border: none;
-            margin: 10px;
-            width: 200px;
-        }
-
-        .call-alert {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.9);
-            padding: 30px;
-            border-radius: 15px;
-            text-align: center;
-            animation: popIn 0.3s ease;
-            z-index: 100;
-        }
-
-        .call-alert button {
-            margin: 10px;
-        }
-
-        @keyframes popIn {
-            from { transform: translate(-50%, -50%) scale(0.5); }
-            to { transform: translate(-50%, -50%) scale(1); }
+        .toggle-link {
+            color: #a1c4fd;
+            cursor: pointer;
+            text-decoration: underline;
+            margin-top: 10px;
+            display: inline-block;
         }
 
         .status {
-            text-align: center;
             margin-top: 20px;
             min-height: 24px;
-        }
-
-        /* Mobile Layout */
-        @media (max-width: 768px) {
-            .video-container {
-                flex-direction: column;
-                gap: 10px;
-            }
-
-            .video-box {
-                min-height: 200px;
-                max-height: 300px;
-                width: 100%;
-            }
-
-            video {
-                max-height: 250px;
-            }
-
-            .local-video-box {
-                order: 1;
-            }
-
-            .remote-video-box {
-                order: 2;
-            }
-
-            .controls {
-                gap: 10px;
-                padding: 10px;
-                justify-content: center;
-            }
-
-            button {
-                padding: 10px 20px;
-                font-size: 14px;
-            }
-
-            input {
-                width: 80%;
-                max-width: 250px;
-            }
-        }
-
-        /* Desktop Layout */
-        @media (min-width: 769px) {
-            .video-container {
-                flex-direction: row;
-            }
+            color: #ff4d4d;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="code-section">
-            <h2>Your Code: <span id="myCode"></span></h2>
-            <input type="text" id="targetCode" placeholder="Enter code to call">
-            <button onclick="startCall()">Call</button>
-            <div class="status" id="status"></div>
+    <div class="auth-container">
+        <h2 id="formTitle">Login</h2>
+        <div class="form-group">
+            <input type="email" id="email" placeholder="Email" required>
         </div>
-
-        <div class="video-container">
-            <div class="video-box local-video-box">
-                <video id="localVideo" autoplay muted></video>
-                <div id="localPlaceholder" class="placeholder">Your camera will appear here</div>
-            </div>
-            <div class="video-box remote-video-box">
-                <video id="remoteVideo" autoplay></video>
-                <div id="remotePlaceholder" class="placeholder">Waiting for connection...</div>
-            </div>
+        <div class="form-group">
+            <input type="password" id="password" placeholder="Password" required>
         </div>
-
-        <div class="controls">
-            <button id="toggleCam" onclick="toggleCamera()">Camera Off</button>
-            <button id="toggleMic" onclick="toggleMic()">Mic Off</button>
-            <button id="endCall" onclick="endCall()" style="display: none; background: #ff4d4d;">End Call</button>
-        </div>
+        <button id="authButton" onclick="handleAuth()">Login</button>
+        <div class="toggle-link" onclick="toggleForm()">Don't have an account? Sign Up</div>
+        <div class="status" id="status"></div>
     </div>
 
-    <div id="incomingCallAlert" class="call-alert" style="display: none;">
-        <h2>Incoming Call from <span id="callerId"></span></h2>
-        <button onclick="acceptCall()">Accept</button>
-        <button onclick="rejectCall()" style="background: #ff4d4d;">Reject</button>
-    </div>
-
-    <!-- Firebase and WebRTC Adapter -->
+    <!-- Firebase -->
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
-    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
 
     <script>
         // Firebase Config
@@ -227,402 +121,56 @@
         };
 
         firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
         const db = firebase.firestore();
 
         // DOM Elements
-        const localVideo = document.getElementById('localVideo');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const localPlaceholder = document.getElementById('localPlaceholder');
-        const remotePlaceholder = document.getElementById('remotePlaceholder');
+        const formTitle = document.getElementById('formTitle');
+        const authButton = document.getElementById('authButton');
+        const emailInput = document.getElementById('email');
+        const passwordInput = document.getElementById('password');
         const statusDiv = document.getElementById('status');
-        const incomingCallAlert = document.getElementById('incomingCallAlert');
-        const callerIdSpan = document.getElementById('callerId');
-        const endCallBtn = document.getElementById('endCall');
 
-        // WebRTC Variables
-        let localStream;
-        let remoteStream;
-        let peerConnection;
-        let myCode;
-        let targetCode;
-        let callerCode;
-        let isCaller = false;
-        let callDoc;
-        let mediaInitialized = false;
-        let callListeners = []; // Store Firestore listeners for cleanup
+        let isLogin = true;
 
-        // Generate unique code (4-10 characters)
-        function generateCode() {
-            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-            let result = '';
-            const length = Math.floor(Math.random() * 7) + 4;
-            for (let i = 0; i < length; i++) {
-                result += chars.charAt(Math.floor(Math.random() * chars.length));
-            }
-            return result;
+        // Toggle between login and signup
+        function toggleForm() {
+            isLogin = !isLogin;
+            formTitle.textContent = isLogin ? 'Login' : 'Sign Up';
+            authButton.textContent = isLogin ? 'Login' : 'Sign Up';
+            statusDiv.textContent = '';
+            document.querySelector('.toggle-link').textContent = isLogin ? "Don't have an account? Sign Up" : 'Already have an account? Login';
         }
 
-        // Reset call state
-        function resetCallState() {
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
+        // Handle login/signup
+        async function handleAuth() {
+            const email = emailInput.value.trim();
+            const password = passwordInput.value.trim();
+            statusDiv.textContent = '';
+
+            if (!email || !password) {
+                statusDiv.textContent = 'Please enter email and password';
+                return;
             }
-            if (remoteStream) {
-                remoteStream.getTracks().forEach(track => track.stop());
-                remoteStream = null;
-            }
-            remoteVideo.srcObject = null;
-            remotePlaceholder.style.display = 'block';
-            remoteVideo.style.display = 'none';
-            endCallBtn.style.display = 'none';
-            targetCode = null;
-            callerCode = null;
-            isCaller = false;
-            callDoc = null;
-            // Unsubscribe from all Firestore listeners
-            callListeners.forEach(unsubscribe => unsubscribe());
-            callListeners = [];
-        }
-
-        // Initialize the application
-        async function init() {
-            myCode = generateCode();
-            document.getElementById('myCode').textContent = myCode;
-
-            await db.collection('users').doc(myCode).set({
-                online: true,
-                lastSeen: firebase.firestore.FieldValue.serverTimestamp()
-            });
-
-            const callListener = db.collection('users').doc(myCode).collection('calls').onSnapshot(snapshot => {
-                snapshot.docChanges().forEach(change => {
-                    if (change.type === 'added') {
-                        handleIncomingCall(change.doc.data());
-                    }
-                });
-            });
-            callListeners.push(callListener);
 
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                localVideo.srcObject = localStream;
-                localPlaceholder.style.display = 'none';
-                localVideo.style.display = 'block';
-                mediaInitialized = true;
+                if (isLogin) {
+                    await auth.signInWithEmailAndPassword(email, password);
+                } else {
+                    await auth.createUserWithEmailAndPassword(email, password);
+                }
+                window.location.href = 'callid.html';
             } catch (error) {
-                console.error('Error accessing media devices:', error);
-                statusDiv.textContent = 'Could not access camera/microphone. Please grant permissions and refresh.';
-                mediaInitialized = false;
+                statusDiv.textContent = error.message;
             }
         }
 
-        // Handle incoming call
-        function handleIncomingCall(callData) {
-            if (callData.status === 'calling') {
-                callerCode = callData.caller;
-                callerIdSpan.textContent = callerCode;
-                incomingCallAlert.style.display = 'block';
-                statusDiv.textContent = `Incoming call from ${callerCode}`;
-            } else if (callData.status === 'ended') {
-                if (incomingCallAlert.style.display === 'block') {
-                    incomingCallAlert.style.display = 'none';
-                    statusDiv.textContent = 'Call ended by the other party';
-                    setTimeout(() => statusDiv.textContent = '', 3000);
-                }
+        // Redirect if already logged in
+        auth.onAuthStateChanged(user => {
+            if (user) {
+                window.location.href = 'callid.html';
             }
-        }
-
-        // Start a call
-        async function startCall() {
-            if (!mediaInitialized) {
-                statusDiv.textContent = 'Camera/microphone not initialized. Please refresh and allow permissions.';
-                return;
-            }
-
-            resetCallState(); // Reset state before new call
-
-            targetCode = document.getElementById('targetCode').value.trim();
-            if (!targetCode) {
-                statusDiv.textContent = 'Please enter a code to call';
-                return;
-            }
-            if (targetCode === myCode) {
-                statusDiv.textContent = "You can't call yourself";
-                return;
-            }
-
-            statusDiv.textContent = `Calling ${targetCode}...`;
-            isCaller = true;
-
-            const targetUser = await db.collection('users').doc(targetCode).get();
-            if (!targetUser.exists) {
-                statusDiv.textContent = 'User not found';
-                return;
-            }
-
-            await createPeerConnection();
-
-            callDoc = db.collection('calls').doc();
-            const offerCandidates = callDoc.collection('offerCandidates');
-            const answerCandidates = callDoc.collection('answerCandidates');
-
-            await db.collection('users').doc(targetCode).collection('calls').doc(callDoc.id).set({
-                caller: myCode,
-                callId: callDoc.id,
-                status: 'calling',
-                timestamp: firebase.firestore.FieldValue.serverTimestamp()
-            });
-
-            const offerDescription = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offerDescription);
-
-            const offer = {
-                sdp: offerDescription.sdp,
-                type: offerDescription.type,
-                caller: myCode,
-                callee: targetCode
-            };
-
-            await callDoc.set({ offer });
-
-            const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
-                const data = snapshot.data();
-                if (!peerConnection.currentRemoteDescription && data?.answer) {
-                    const answerDescription = new RTCSessionDescription(data.answer);
-                    await peerConnection.setRemoteDescription(answerDescription);
-                    statusDiv.textContent = `Connected with ${targetCode}`;
-                    endCallBtn.style.display = 'block';
-                }
-            });
-            callListeners.push(callSnapshotListener);
-
-            const answerCandidatesListener = answerCandidates.onSnapshot(snapshot => {
-                snapshot.docChanges().forEach(async change => {
-                    if (change.type === 'added') {
-                        const candidate = new RTCIceCandidate(change.doc.data());
-                        await peerConnection.addIceCandidate(candidate);
-                    }
-                });
-            });
-            callListeners.push(answerCandidatesListener);
-
-            peerConnection.onicecandidate = async event => {
-                if (event.candidate) {
-                    await offerCandidates.add(event.candidate.toJSON());
-                }
-            };
-        }
-
-        // Accept incoming call
-        async function acceptCall() {
-            if (!mediaInitialized) {
-                statusDiv.textContent = 'Camera/microphone not initialized. Please refresh and allow permissions.';
-                incomingCallAlert.style.display = 'none';
-                return;
-            }
-
-            resetCallState(); // Reset state before accepting call
-
-            incomingCallAlert.style.display = 'none';
-            statusDiv.textContent = `Connecting with ${callerCode}...`;
-
-            await createPeerConnection();
-
-            const callQuery = await db.collection('users').doc(myCode).collection('calls')
-                .where('caller', '==', callerCode)
-                .where('status', '==', 'calling')
-                .get();
-
-            if (callQuery.empty) {
-                statusDiv.textContent = 'Call no longer exists';
-                return;
-            }
-
-            const callData = callQuery.docs[0].data();
-            callDoc = db.collection('calls').doc(callData.callId);
-            const offerCandidates = callDoc.collection('offerCandidates');
-            const answerCandidates = callDoc.collection('answerCandidates');
-
-            await db.collection('users').doc(myCode).collection('calls').doc(callDoc.id).update({
-                status: 'answered'
-            });
-
-            const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
-                const data = snapshot.data();
-                if (!peerConnection.currentRemoteDescription && data?.offer) {
-                    const offerDescription = data.offer;
-                    await peerConnection.setRemoteDescription(new RTCSessionDescription(offerDescription));
-
-                    const answerDescription = await peerConnection.createAnswer();
-                    await peerConnection.setLocalDescription(answerDescription);
-
-                    const answer = {
-                        type: answerDescription.type,
-                        sdp: answerDescription.sdp
-                    };
-
-                    await callDoc.update({ answer });
-
-                    statusDiv.textContent = `Connected with ${callerCode}`;
-                    endCallBtn.style.display = 'block';
-                }
-            });
-            callListeners.push(callSnapshotListener);
-
-            const offerCandidatesListener = offerCandidates.onSnapshot(snapshot => {
-                snapshot.docChanges().forEach(async change => {
-                    if (change.type === 'added') {
-                        await peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
-                    }
-                });
-            });
-            callListeners.push(offerCandidatesListener);
-
-            peerConnection.onicecandidate = async event => {
-                if (event.candidate) {
-                    await answerCandidates.add(event.candidate.toJSON());
-                }
-            };
-        }
-
-        // Reject call
-        async function rejectCall() {
-            incomingCallAlert.style.display = 'none';
-            statusDiv.textContent = 'Call rejected';
-            setTimeout(() => statusDiv.textContent = '', 3000);
-
-            const callQuery = await db.collection('users').doc(myCode).collection('calls')
-                .where('caller', '==', callerCode)
-                .where('status', '==', 'calling')
-                .get();
-
-            if (!callQuery.empty) {
-                await db.collection('users').doc(myCode).collection('calls').doc(callQuery.docs[0].id).update({
-                    status: 'rejected'
-                });
-            }
-        }
-
-        // End current call
-        async function endCall() {
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-
-            if (isCaller && targetCode && callDoc) {
-                await db.collection('users').doc(targetCode).collection('calls').doc(callDoc.id).update({
-                    status: 'ended'
-                });
-            } else if (callerCode && callDoc) {
-                await db.collection('users').doc(callerCode).collection('calls').doc(callDoc.id).update({
-                    status: 'ended'
-                });
-            }
-
-            resetCallState();
-            statusDiv.textContent = 'Call ended';
-            setTimeout(() => statusDiv.textContent = '', 3000);
-        }
-
-        // Create peer connection
-        async function createPeerConnection() {
-            const configuration = {
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' },
-                    // Add TURN servers for better connectivity (optional, requires credentials)
-                    // {
-                    //     urls: 'turn:your.turn.server:3478',
-                    //     username: 'username',
-                    //     credential: 'password'
-                    // }
-                ]
-            };
-
-            peerConnection = new RTCPeerConnection(configuration);
-            remoteStream = new MediaStream();
-            remoteVideo.srcObject = remoteStream;
-            remotePlaceholder.style.display = 'none';
-            remoteVideo.style.display = 'block';
-
-            if (localStream) {
-                localStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, localStream);
-                });
-            } else {
-                console.error('Local stream is not available');
-                statusDiv.textContent = 'Cannot start call: Camera/microphone not available';
-                return;
-            }
-
-            peerConnection.ontrack = event => {
-                if (event.streams[0]) {
-                    event.streams[0].getTracks().forEach(track => {
-                        remoteStream.addTrack(track);
-                    });
-                }
-            };
-
-            peerConnection.onconnectionstatechange = () => {
-                console.log('Connection state:', peerConnection.connectionState);
-                if (peerConnection.connectionState === 'disconnected' || 
-                    peerConnection.connectionState === 'failed') {
-                    console.log('Connection failed or disconnected, ending call');
-                    endCall();
-                } else if (peerConnection.connectionState === 'connected') {
-                    console.log('Peer connection established successfully');
-                }
-            };
-
-            peerConnection.oniceconnectionstatechange = () => {
-                console.log('ICE connection state:', peerConnection.iceConnectionState);
-                if (peerConnection.iceConnectionState === 'failed') {
-                    peerConnection.restartIce();
-                }
-            };
-        }
-
-        // Toggle camera
-        function toggleCamera() {
-            if (!localStream) return;
-            const videoTrack = localStream.getVideoTracks()[0];
-            if (videoTrack) {
-                videoTrack.enabled = !videoTrack.enabled;
-                document.getElementById('toggleCam').textContent = 
-                    videoTrack.enabled ? 'Camera Off' : 'Camera On';
-            }
-        }
-
-        // Toggle microphone
-        function toggleMic() {
-            if (!localStream) return;
-            const audioTrack = localStream.getAudioTracks()[0];
-            if (audioTrack) {
-                audioTrack.enabled = !audioTrack.enabled;
-                document.getElementById('toggleMic').textContent = 
-                    audioTrack.enabled ? 'Mic Off' : 'Mic On';
-            }
-        }
-
-        // Initialize when window loads
-        window.onload = init;
-
-        // Clean up when window closes
-        window.onbeforeunload = async () => {
-            if (myCode) {
-                await db.collection('users').doc(myCode).update({
-                    online: false,
-                    lastSeen: firebase.firestore.FieldValue.serverTimestamp()
-                });
-            }
-            resetCallState();
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
-            }
-        };
+        });
     </script>
 </body>
 </html>
