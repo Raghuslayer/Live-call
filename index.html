@@ -405,10 +405,6 @@
             auth.signOut().then(() => {
                 console.log('Signed out, showing auth section');
                 resetCallState();
-                if (localStream) {
-                    localStream.getTracks().forEach(track => track.stop());
-                    localStream = null;
-                }
                 showSection(authContainer);
                 authStatus.textContent = 'Signed out successfully';
             }).catch(error => {
@@ -417,7 +413,7 @@
             });
         }
 
-        function resetCallState() {
+        async function resetCallState() {
             console.log('Resetting call state');
             if (peerConnection) {
                 peerConnection.close();
@@ -427,16 +423,9 @@
                 remoteStream.getTracks().forEach(track => track.stop());
                 remoteStream = null;
             }
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
-                localStream = null;
-            }
             remoteVideo.srcObject = null;
-            localVideo.srcObject = null;
             remotePlaceholder.style.display = 'block';
-            localPlaceholder.style.display = 'block';
             remoteVideo.style.display = 'none';
-            localVideo.style.display = 'none';
             endCallBtn.style.display = 'none';
             incomingCallAlert.style.display = 'none';
             targetCallId = null;
@@ -446,6 +435,15 @@
             callListeners.forEach(unsubscribe => unsubscribe());
             callListeners = [];
             callStatus.textContent = '';
+
+            // Reinitialize localStream for the next call
+            try {
+                await initMediaStream();
+                console.log('Local stream reinitialized after reset');
+            } catch (error) {
+                console.error('Error reinitializing local stream:', error);
+                callStatus.textContent = 'Failed to reinitialize camera/microphone';
+            }
         }
 
         async function initMediaStream() {
@@ -529,6 +527,12 @@
                     return;
                 }
                 callerCallId = callData.caller;
+                if (!callerCallId) {
+                    console.error('Caller ID is missing in call data:', callData);
+                    callStatus.textContent = 'Invalid call: Caller ID missing';
+                    db.collection('users').doc(auth.currentUser.uid).collection('calls').doc(callDocId).delete();
+                    return;
+                }
                 callerIdSpan.textContent = callerCallId;
                 incomingCallAlert.style.display = 'block';
                 callStatus.textContent = `Incoming call from ${callerCallId}`;
@@ -540,7 +544,7 @@
                     endCall();
                 } else {
                     callStatus.textContent = callData.status === 'rejected' ? 'Call was rejected' : 
-                                            callData.status === 'answered' ? 'Call connected' : 
+                                            callData.status === 'answered' ? `Call connected with ${callerCallId || 'unknown'}` : 
                                             callData.status === 'completed' ? 'Call completed' : '';
                     if (callStatus.textContent) {
                         setTimeout(() => callStatus.textContent = '', 3000);
@@ -552,9 +556,10 @@
 
         async function startCall() {
             const mediaSuccess = await initMediaStream();
-            if (!mediaSuccess) return;
-
-            resetCallState();
+            if (!mediaSuccess) {
+                callStatus.textContent = 'Failed to access camera/microphone';
+                return;
+            }
 
             targetCallId = document.getElementById('targetCallId').value.trim();
             if (!targetCallId) {
@@ -583,22 +588,14 @@
                 const offerCandidates = callDoc.collection('offerCandidates');
                 const answerCandidates = callDoc.collection('answerCandidates');
 
-                try {
-                    const callData = {
-                        caller: myCallId,
-                        callId: callDoc.id,
-                        status: 'calling',
-                        timestamp: firebase.firestore.FieldValue.serverTimestamp()
-                    };
-                    console.log('Attempting to write call notification:', callData);
-                    await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).set(callData);
-                    console.log(`Call notification written to target user: ${targetUid}, callId: ${callDoc.id}`);
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                } catch (error) {
-                    console.error('Failed to notify target user:', error);
-                    callStatus.textContent = 'Failed to initiate call: ' + (error.code === 'permission-denied' ? 'Insufficient permissions. Please check Firestore rules.' : error.message);
-                    return;
-                }
+                const callData = {
+                    caller: myCallId,
+                    callId: callDoc.id,
+                    status: 'calling',
+                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                };
+                await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).set(callData);
+                console.log(`Call notification written to target user: ${targetUid}, callId: ${callDoc.id}`);
 
                 const offerDescription = await peerConnection.createOffer();
                 await peerConnection.setLocalDescription(offerDescription);
@@ -669,10 +666,9 @@
             const mediaSuccess = await initMediaStream();
             if (!mediaSuccess) {
                 incomingCallAlert.style.display = 'none';
+                callStatus.textContent = 'Failed to access camera/microphone';
                 return;
             }
-
-            resetCallState();
 
             incomingCallAlert.style.display = 'none';
             callStatus.textContent = `Connecting with ${callerCallId}...`;
@@ -706,8 +702,6 @@
                     answeredAt: firebase.firestore.FieldValue.serverTimestamp()
                 });
                 console.log('Call marked as answered');
-
-                await new Promise(resolve => setTimeout(resolve, 500));
 
                 const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
                     const data = snapshot.data();
@@ -770,36 +764,35 @@
             }
         }
 
-async function rejectCall() {
-    incomingCallAlert.style.display = 'none';
-    callStatus.textContent = 'Call rejected';
-    setTimeout(() => callStatus.textContent = '', 3000);
+        async function rejectCall() {
+            incomingCallAlert.style.display = 'none';
+            callStatus.textContent = 'Call rejected';
+            setTimeout(() => callStatus.textContent = '', 3000);
 
-    try {
-        const user = auth.currentUser;
-        const callDocId = incomingCallAlert.dataset.callDocId;
-        console.log('Rejecting call with doc ID:', callDocId);
+            try {
+                const user = auth.currentUser;
+                const callDocId = incomingCallAlert.dataset.callDocId;
+                console.log('Rejecting call with doc ID:', callDocId);
 
-        const callDocRef = db.collection('users').doc(user.uid).collection('calls').doc(callDocId);
-        await callDocRef.delete();
-        console.log('Call notification deleted');
+                const callDocRef = db.collection('users').doc(user.uid).collection('calls').doc(callDocId);
+                await callDocRef.delete();
+                console.log('Call notification deleted');
 
-        if (callerCallId && callDoc) {
-            const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
-            if (callerCallIdDoc.exists) {
-                const callerUid = callerCallIdDoc.data().uid;
-                await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).delete();
-                console.log('Caller’s call notification deleted');
+                if (callerCallId && callDoc) {
+                    const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
+                    if (callerCallIdDoc.exists) {
+                        const callerUid = callerCallIdDoc.data().uid;
+                        await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).delete();
+                        console.log('Caller’s call notification deleted');
+                    }
+                }
+            } catch (error) {
+                console.error('Error rejecting call:', error);
+                callStatus.textContent = 'Error rejecting call: ' + error.message;
             }
-        }
-    } catch (error) {
-        console.error('Error rejecting call:', error);
-        callStatus.textContent = 'Error rejecting call: ' + error.message;
-    }
 
-    endCall();
-}
-          
+            endCall();
+        }
 
         async function endCall() {
             console.log('Ending call');
@@ -810,10 +803,6 @@ async function rejectCall() {
             if (remoteStream) {
                 remoteStream.getTracks().forEach(track => track.stop());
                 remoteStream = null;
-            }
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
-                localStream = null;
             }
 
             try {
@@ -847,10 +836,18 @@ async function rejectCall() {
             resetCallState();
             callStatus.textContent = 'Call ended';
             setTimeout(() => callStatus.textContent = '', 3000);
-            initMediaStream(); // Reinitialize media for next call
         }
 
         async function createPeerConnection() {
+            if (!localStream) {
+                console.log('Local stream not available, initializing...');
+                const mediaSuccess = await initMediaStream();
+                if (!mediaSuccess) {
+                    callStatus.textContent = 'Cannot start call: Camera/microphone not available';
+                    throw new Error('Failed to initialize media stream');
+                }
+            }
+
             const configuration = {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
@@ -865,16 +862,10 @@ async function rejectCall() {
             remotePlaceholder.style.display = 'none';
             remoteVideo.style.display = 'block';
 
-            if (localStream) {
-                localStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, localStream);
-                    console.log('Added track to peerConnection:', track);
-                });
-            } else {
-                console.error('Local stream is not available');
-                callStatus.textContent = 'Cannot start call: Camera/microphone not available';
-                return;
-            }
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+                console.log('Added track to peerConnection:', track);
+            });
 
             peerConnection.ontrack = event => {
                 console.log('ontrack event:', event);
@@ -910,22 +901,32 @@ async function rejectCall() {
         }
 
         function toggleCamera() {
-            if (!localStream) return;
+            if (!localStream) {
+                console.log('Cannot toggle camera: Local stream not available');
+                callStatus.textContent = 'Camera not available';
+                return;
+            }
             const videoTrack = localStream.getVideoTracks()[0];
             if (videoTrack) {
                 videoTrack.enabled = !videoTrack.enabled;
                 document.getElementById('toggleCam').textContent = 
                     videoTrack.enabled ? 'Camera Off' : 'Camera On';
+                console.log('Camera toggled:', videoTrack.enabled ? 'On' : 'Off');
             }
         }
 
         function toggleMic() {
-            if (!localStream) return;
+            if (!localStream) {
+                console.log('Cannot toggle mic: Local stream not available');
+                callStatus.textContent = 'Microphone not available';
+                return;
+            }
             const audioTrack = localStream.getAudioTracks()[0];
             if (audioTrack) {
                 audioTrack.enabled = !audioTrack.enabled;
                 document.getElementById('toggleMic').textContent = 
                     audioTrack.enabled ? 'Mic Off' : 'Mic On';
+                console.log('Microphone toggled:', audioTrack.enabled ? 'On' : 'Off');
             }
         }
 
