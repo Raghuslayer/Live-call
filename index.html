@@ -38,12 +38,22 @@
             padding: 15px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
             backdrop-filter: blur(10px);
+            min-height: 400px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         video {
             width: 100%;
             border-radius: 10px;
             transform: scaleX(-1);
+            max-height: 400px;
+        }
+
+        .placeholder {
+            text-align: center;
+            color: rgba(255, 255, 255, 0.7);
         }
 
         .controls {
@@ -92,11 +102,22 @@
             border-radius: 15px;
             text-align: center;
             animation: popIn 0.3s ease;
+            z-index: 100;
+        }
+
+        .call-alert button {
+            margin: 10px;
         }
 
         @keyframes popIn {
             from { transform: translate(-50%, -50%) scale(0.5); }
             to { transform: translate(-50%, -50%) scale(1); }
+        }
+
+        .status {
+            text-align: center;
+            margin-top: 20px;
+            min-height: 24px;
         }
     </style>
 </head>
@@ -106,21 +127,31 @@
             <h2>Your Code: <span id="myCode"></span></h2>
             <input type="text" id="targetCode" placeholder="Enter code to call">
             <button onclick="startCall()">Call</button>
+            <div class="status" id="status"></div>
         </div>
 
         <div class="video-container">
             <div class="video-box">
                 <video id="localVideo" autoplay muted></video>
+                <div id="localPlaceholder" class="placeholder">Your camera will appear here</div>
             </div>
             <div class="video-box">
                 <video id="remoteVideo" autoplay></video>
+                <div id="remotePlaceholder" class="placeholder">Waiting for connection...</div>
             </div>
         </div>
 
         <div class="controls">
             <button id="toggleCam" onclick="toggleCamera()">Camera Off</button>
             <button id="toggleMic" onclick="toggleMic()">Mic Off</button>
+            <button id="endCall" onclick="endCall()" style="display: none; background: #ff4d4d;">End Call</button>
         </div>
+    </div>
+
+    <div id="incomingCallAlert" class="call-alert" style="display: none;">
+        <h2>Incoming Call from <span id="callerId"></span></h2>
+        <button onclick="acceptCall()">Accept</button>
+        <button onclick="rejectCall()" style="background: #ff4d4d;">Reject</button>
     </div>
 
     <!-- Firebase and WebRTC Adapter -->
@@ -130,7 +161,7 @@
 
     <script>
         // Firebase Config (Replace with your config)
-       const firebaseConfig = {
+const firebaseConfig = {
   apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
   authDomain: "live-call-33ea7.firebaseapp.com",
   projectId: "live-call-33ea7",
@@ -142,66 +173,124 @@
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
 
+        // DOM Elements
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const localPlaceholder = document.getElementById('localPlaceholder');
+        const remotePlaceholder = document.getElementById('remotePlaceholder');
+        const statusDiv = document.getElementById('status');
+        const incomingCallAlert = document.getElementById('incomingCallAlert');
+        const callerIdSpan = document.getElementById('callerId');
+        const endCallBtn = document.getElementById('endCall');
+
+        // WebRTC Variables
         let localStream;
         let remoteStream;
         let peerConnection;
         let myCode;
         let targetCode;
+        let callerCode;
+        let isCaller = false;
+        let callDoc;
+        let answerDoc;
 
-        // Generate unique code
+        // Generate unique code (4-10 characters)
         function generateCode() {
-            return Math.random().toString(36).substr(2, 6);
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            let result = '';
+            const length = Math.floor(Math.random() * 7) + 4; // 4-10 characters
+            for (let i = 0; i < length; i++) {
+                result += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return result;
         }
 
-        // Initialize
+        // Initialize the application
         async function init() {
+            // Generate and display user code
             myCode = generateCode();
             document.getElementById('myCode').textContent = myCode;
             
+            // Save user to Firestore
+            await db.collection('users').doc(myCode).set({
+                online: true,
+                lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+            });
+
+            // Set up listener for incoming calls
+            db.collection('users').doc(myCode).collection('calls').onSnapshot(snapshot => {
+                snapshot.docChanges().forEach(change => {
+                    if (change.type === 'added') {
+                        handleIncomingCall(change.doc.data());
+                    }
+                });
+            });
+
+            // Request camera and microphone access
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                document.getElementById('localVideo').srcObject = localStream;
+                localVideo.srcObject = localStream;
+                localPlaceholder.style.display = 'none';
+                localVideo.style.display = 'block';
             } catch (error) {
                 console.error('Error accessing media devices:', error);
+                statusDiv.textContent = 'Could not access camera/microphone';
             }
         }
 
-        // WebRTC Setup
-        async function createPeerConnection() {
-            const configuration = {
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-            };
-
-            peerConnection = new RTCPeerConnection(configuration);
-            remoteStream = new MediaStream();
-            document.getElementById('remoteVideo').srcObject = remoteStream;
-
-            localStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, localStream);
-            });
-
-            peerConnection.ontrack = event => {
-                event.streams[0].getTracks().forEach(track => {
-                    remoteStream.addTrack(track);
-                });
-            };
-
-            // Listen for ICE candidates
-            peerConnection.onicecandidate = async event => {
-                if (event.candidate) {
-                    await db.collection('calls').doc(targetCode).collection('candidates').add(event.candidate.toJSON());
+        // Handle incoming call
+        function handleIncomingCall(callData) {
+            if (callData.status === 'calling') {
+                callerCode = callData.caller;
+                callerIdSpan.textContent = callerCode;
+                incomingCallAlert.style.display = 'block';
+                statusDiv.textContent = `Incoming call from ${callerCode}`;
+            } else if (callData.status === 'ended') {
+                if (incomingCallAlert.style.display === 'block') {
+                    incomingCallAlert.style.display = 'none';
+                    statusDiv.textContent = 'Call ended by the other party';
+                    setTimeout(() => statusDiv.textContent = '', 3000);
                 }
-            };
+            }
         }
 
-        // Start call
+        // Start a call
         async function startCall() {
-            targetCode = document.getElementById('targetCode').value;
+            targetCode = document.getElementById('targetCode').value.trim();
+            if (!targetCode) {
+                statusDiv.textContent = 'Please enter a code to call';
+                return;
+            }
+            if (targetCode === myCode) {
+                statusDiv.textContent = "You can't call yourself";
+                return;
+            }
+
+            statusDiv.textContent = `Calling ${targetCode}...`;
+            isCaller = true;
+
+            // Check if target user exists
+            const targetUser = await db.collection('users').doc(targetCode).get();
+            if (!targetUser.exists) {
+                statusDiv.textContent = 'User not found';
+                return;
+            }
+
+            // Create peer connection
             await createPeerConnection();
 
-            const callDoc = db.collection('calls').doc(targetCode);
-            const offerCandidates = callDoc.collection('candidates');
+            // Create call document
+            callDoc = db.collection('calls').doc();
+            const offerCandidates = callDoc.collection('offerCandidates');
             const answerCandidates = callDoc.collection('answerCandidates');
+
+            // Notify the callee
+            await db.collection('users').doc(targetCode).collection('calls').doc(callDoc.id).set({
+                caller: myCode,
+                callId: callDoc.id,
+                status: 'calling',
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
 
             // Create offer
             const offerDescription = await peerConnection.createOffer();
@@ -210,7 +299,8 @@
             const offer = {
                 sdp: offerDescription.sdp,
                 type: offerDescription.type,
-                caller: myCode
+                caller: myCode,
+                callee: targetCode
             };
 
             await callDoc.set({ offer });
@@ -221,37 +311,216 @@
                 if (!peerConnection.currentRemoteDescription && data?.answer) {
                     const answerDescription = new RTCSessionDescription(data.answer);
                     await peerConnection.setRemoteDescription(answerDescription);
+                    statusDiv.textContent = `Connected with ${targetCode}`;
+                    endCallBtn.style.display = 'block';
                 }
             });
 
             // Listen for remote ICE candidates
             answerCandidates.onSnapshot(snapshot => {
-                snapshot.docChanges().forEach(change => {
+                snapshot.docChanges().forEach(async change => {
                     if (change.type === 'added') {
                         const candidate = new RTCIceCandidate(change.doc.data());
-                        peerConnection.addIceCandidate(candidate);
+                        await peerConnection.addIceCandidate(candidate);
                     }
                 });
             });
+
+            // Gather ICE candidates
+            peerConnection.onicecandidate = async event => {
+                if (event.candidate) {
+                    await offerCandidates.add(event.candidate.toJSON());
+                }
+            };
         }
 
-        // Toggle controls
+        // Accept incoming call
+        async function acceptCall() {
+            incomingCallAlert.style.display = 'none';
+            statusDiv.textContent = `Connecting with ${callerCode}...`;
+            
+            await createPeerConnection();
+            
+            // Get the call document
+            const callQuery = await db.collection('users').doc(myCode).collection('calls')
+                .where('caller', '==', callerCode)
+                .where('status', '==', 'calling')
+                .get();
+                
+            if (callQuery.empty) {
+                statusDiv.textContent = 'Call no longer exists';
+                return;
+            }
+            
+            const callData = callQuery.docs[0].data();
+            callDoc = db.collection('calls').doc(callData.callId);
+            const offerCandidates = callDoc.collection('offerCandidates');
+            const answerCandidates = callDoc.collection('answerCandidates');
+
+            // Update call status
+            await db.collection('users').doc(myCode).collection('calls').doc(callDoc.id).update({
+                status: 'answered'
+            });
+
+            // Listen for offer
+            callDoc.onSnapshot(async snapshot => {
+                const data = snapshot.data();
+                if (!peerConnection.currentRemoteDescription && data?.offer) {
+                    const offerDescription = data.offer;
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(offerDescription));
+
+                    // Create answer
+                    const answerDescription = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answerDescription);
+
+                    const answer = {
+                        type: answerDescription.type,
+                        sdp: answerDescription.sdp
+                    };
+
+                    await callDoc.update({ answer });
+
+                    statusDiv.textContent = `Connected with ${callerCode}`;
+                    endCallBtn.style.display = 'block';
+                }
+            });
+
+            // Listen for ICE candidates from caller
+            offerCandidates.onSnapshot(snapshot => {
+                snapshot.docChanges().forEach(async change => {
+                    if (change.type === 'added') {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+                    }
+                });
+            });
+
+            // Gather ICE candidates
+            peerConnection.onicecandidate = async event => {
+                if (event.candidate) {
+                    await answerCandidates.add(event.candidate.toJSON());
+                }
+            };
+        }
+
+        // Reject call
+        async function rejectCall() {
+            incomingCallAlert.style.display = 'none';
+            statusDiv.textContent = 'Call rejected';
+            setTimeout(() => statusDiv.textContent = '', 3000);
+            
+            // Update call status
+            const callQuery = await db.collection('users').doc(myCode).collection('calls')
+                .where('caller', '==', callerCode)
+                .where('status', '==', 'calling')
+                .get();
+                
+            if (!callQuery.empty) {
+                await db.collection('users').doc(myCode).collection('calls').doc(callQuery.docs[0].id).update({
+                    status: 'rejected'
+                });
+            }
+        }
+
+        // End current call
+        async function endCall() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            
+            if (isCaller) {
+                // Notify callee that call ended
+                await db.collection('users').doc(targetCode).collection('calls').doc(callDoc.id).update({
+                    status: 'ended'
+                });
+            } else {
+                // Notify caller that call ended
+                await db.collection('users').doc(callerCode).collection('calls').doc(callDoc.id).update({
+                    status: 'ended'
+                });
+            }
+            
+            // Clean up UI
+            remoteVideo.srcObject = null;
+            remotePlaceholder.style.display = 'block';
+            remoteVideo.style.display = 'none';
+            endCallBtn.style.display = 'none';
+            statusDiv.textContent = 'Call ended';
+            setTimeout(() => statusDiv.textContent = '', 3000);
+        }
+
+        // Create peer connection
+        async function createPeerConnection() {
+            const configuration = {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' }
+                ]
+            };
+
+            peerConnection = new RTCPeerConnection(configuration);
+            remoteStream = new MediaStream();
+            remoteVideo.srcObject = remoteStream;
+            remotePlaceholder.style.display = 'none';
+            remoteVideo.style.display = 'block';
+
+            // Add local stream tracks
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            // Handle remote stream
+            peerConnection.ontrack = event => {
+                event.streams[0].getTracks().forEach(track => {
+                    remoteStream.addTrack(track);
+                });
+            };
+
+            // Handle connection state changes
+            peerConnection.onconnectionstatechange = () => {
+                if (peerConnection.connectionState === 'disconnected' || 
+                    peerConnection.connectionState === 'failed') {
+                    endCall();
+                }
+            };
+        }
+
+        // Toggle camera
         function toggleCamera() {
             const videoTrack = localStream.getVideoTracks()[0];
-            videoTrack.enabled = !videoTrack.enabled;
-            document.getElementById('toggleCam').textContent = 
-                videoTrack.enabled ? 'Camera Off' : 'Camera On';
+            if (videoTrack) {
+                videoTrack.enabled = !videoTrack.enabled;
+                document.getElementById('toggleCam').textContent = 
+                    videoTrack.enabled ? 'Camera Off' : 'Camera On';
+            }
         }
 
+        // Toggle microphone
         function toggleMic() {
             const audioTrack = localStream.getAudioTracks()[0];
-            audioTrack.enabled = !audioTrack.enabled;
-            document.getElementById('toggleMic').textContent = 
-                audioTrack.enabled ? 'Mic Off' : 'Mic On';
+            if (audioTrack) {
+                audioTrack.enabled = !audioTrack.enabled;
+                document.getElementById('toggleMic').textContent = 
+                    audioTrack.enabled ? 'Mic Off' : 'Mic On';
+            }
         }
 
-        // Initialize app
-        init();
+        // Initialize when window loads
+        window.onload = init;
+
+        // Clean up when window closes
+        window.onbeforeunload = async () => {
+            if (myCode) {
+                await db.collection('users').doc(myCode).update({
+                    online: false,
+                    lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+                });
+            }
+            if (peerConnection) {
+                peerConnection.close();
+            }
+        };
     </script>
 </body>
 </html>
