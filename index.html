@@ -423,7 +423,7 @@
         }
 
         async function resetCallState() {
-            console.log('Resetting call state');
+            console.log('Resetting call state, isCallActive:', isCallActive);
             isCallActive = false;
 
             // Close and nullify WebRTC resources
@@ -479,12 +479,14 @@
                     console.error('Error unsubscribing listener:', error);
                 }
             }
-            console.log('All listeners unsubscribed');
+            console.log('All listeners unsubscribed, callListeners count:', callListeners.length);
 
             try {
                 await cleanupOldCalls();
                 console.log('Firestore cleanup completed');
-                // Reinitialize media stream for next call
+                // Delay to ensure Firestore operations complete
+                await new Promise(resolve => setTimeout(resolve, 100));
+                // Reinitialize media stream
                 const mediaSuccess = await initMediaStream();
                 if (!mediaSuccess) {
                     callStatus.textContent = 'Failed to reinitialize camera/microphone. Please grant permissions.';
@@ -672,6 +674,10 @@
                 callStatus.textContent = 'Another call is active. Please end the current call first.';
                 return;
             }
+            if (callListeners.length > 1) {
+                console.warn('Multiple listeners detected, resetting state');
+                await resetCallState();
+            }
             isCallActive = true;
 
             console.log('Starting call');
@@ -751,9 +757,7 @@
                         await peerConnection.setRemoteDescription(answerDescription);
                         console.log('Remote description set, applying ICE candidates');
                         for (const candidate of pendingIceCandidates) {
-                            await peerConnection.addIceCandidate(candidate).catch(error => {
-                                console.error('Error applying ICE candidate:', error);
-                            });
+                            await retryIceCandidateAddition(candidate);
                         }
                         pendingIceCandidates = [];
                         callStatus.textContent = `Connected with ${targetCallId}`;
@@ -775,9 +779,7 @@
                             const candidate = new RTCIceCandidate(change.doc.data());
                             console.log('Received answer candidate:', candidate);
                             if (peerConnection.currentRemoteDescription) {
-                                await peerConnection.addIceCandidate(candidate).catch(error => {
-                                    console.error('Error adding ICE candidate:', error);
-                                });
+                                await retryIceCandidateAddition(candidate);
                             } else {
                                 pendingIceCandidates.push(candidate);
                                 console.log('Buffered ICE candidate:', candidate);
@@ -812,11 +814,31 @@
             }
         }
 
+        async function retryIceCandidateAddition(candidate) {
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    await peerConnection.addIceCandidate(candidate);
+                    console.log('ICE candidate added successfully:', candidate);
+                    return;
+                } catch (error) {
+                    console.error(`Error adding ICE candidate (attempt ${attempt}/3):`, error);
+                    if (attempt === 3) {
+                        console.warn('Failed to add ICE candidate after retries:', candidate);
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
+            }
+        }
+
         async function acceptCall() {
             if (isCallActive) {
                 callStatus.textContent = 'Another call is active. Please end the current call first.';
                 incomingCallAlert.style.display = 'none';
                 return;
+            }
+            if (callListeners.length > 1) {
+                console.warn('Multiple listeners detected, resetting state');
+                await resetCallState();
             }
             isCallActive = true;
 
@@ -887,9 +909,7 @@
                         console.log('Answer sent to call document:', answer);
 
                         for (const candidate of pendingIceCandidates) {
-                            await peerConnection.addIceCandidate(candidate).catch(error => {
-                                console.error('Error applying ICE candidate:', error);
-                            });
+                            await retryIceCandidateAddition(candidate);
                         }
                         pendingIceCandidates = [];
 
@@ -915,9 +935,7 @@
                             const candidate = new RTCIceCandidate(change.doc.data());
                             console.log('Received offer candidate:', candidate);
                             if (peerConnection.currentRemoteDescription) {
-                                await peerConnection.addIceCandidate(candidate).catch(error => {
-                                    console.error('Error adding ICE candidate:', error);
-                                });
+                                await retryIceCandidateAddition(candidate);
                             } else {
                                 pendingIceCandidates.push(candidate);
                                 console.log('Buffered ICE candidate:', candidate);
@@ -1155,25 +1173,26 @@
                     }
                 } else if (peerConnection.connectionState === 'connected') {
                     console.log('Peer connection established successfully');
-                    // Verify tracks after connection
-                    if (remoteStream.getTracks().length === 0) {
-                        console.warn('No remote tracks after connection, triggering renegotiation');
-                        if (isCaller) {
-                            const offer = await peerConnection.createOffer();
-                            await peerConnection.setLocalDescription(offer);
-                            await retryFirestoreOperation(() =>
-                                callDoc.update({
-                                    offer: {
-                                        sdp: offer.sdp,
-                                        type: offer.type,
-                                        caller: myCallId,
-                                        callee: targetCallId
-                                    }
-                                })
-                            );
-                            console.log('Renegotiation offer sent');
+                    setTimeout(async () => {
+                        if (remoteStream.getTracks().length === 0) {
+                            console.warn('No remote tracks after connection, triggering renegotiation');
+                            if (isCaller && peerConnection.signalingState === 'stable') {
+                                const offer = await peerConnection.createOffer();
+                                await peerConnection.setLocalDescription(offer);
+                                await retryFirestoreOperation(() =>
+                                    callDoc.update({
+                                        offer: {
+                                            sdp: offer.sdp,
+                                            type: offer.type,
+                                            caller: myCallId,
+                                            callee: targetCallId
+                                        }
+                                    })
+                                );
+                                console.log('Renegotiation offer sent');
+                            }
                         }
-                    }
+                    }, 2000);
                 }
             };
 
@@ -1229,7 +1248,6 @@
                 document.getElementById('toggleCam').textContent = 
                     videoTrack.enabled ? 'Camera Off' : 'Camera On';
                 console.log('Camera toggled:', videoTrack.enabled ? 'On' : 'Off');
-                // Trigger renegotiation if in a call
                 if (peerConnection && peerConnection.connectionState === 'connected' && isCaller) {
                     peerConnection.createOffer().then(offer => {
                         peerConnection.setLocalDescription(offer);
@@ -1262,7 +1280,6 @@
                 document.getElementById('toggleMic').textContent = 
                     audioTrack.enabled ? 'Mic Off' : 'Mic On';
                 console.log('Microphone toggled:', audioTrack.enabled ? 'On' : 'Off');
-                // Trigger renegotiation if in a call
                 if (peerConnection && peerConnection.connectionState === 'connected' && isCaller) {
                     peerConnection.createOffer().then(offer => {
                         peerConnection.setLocalDescription(offer);
