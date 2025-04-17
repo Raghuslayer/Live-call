@@ -220,12 +220,12 @@
     <script>
         // Firebase Config
         const firebaseConfig = {
-            apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
-            authDomain: "live-call-33ea7.firebaseapp.com",
-            projectId: "live-call-33ea7",
-            storageBucket: "live-call-33ea7.firebasestorage.app",
-            messagingSenderId: "518167322129",
-            appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
         };
 
         firebase.initializeApp(firebaseConfig);
@@ -288,43 +288,50 @@
         async function init() {
             const user = auth.currentUser;
             if (!user) {
+                console.log('No user, redirecting to index.html');
                 window.location.href = 'index.html';
                 return;
             }
 
-            const userDoc = await db.collection('users').doc(user.uid).get();
-            if (!userDoc.exists || !userDoc.data().callId) {
-                window.location.href = 'callid.html';
-                return;
-            }
-
-            myCallId = userDoc.data().callId;
-            myCallIdSpan.textContent = myCallId;
-
-            await db.collection('users').doc(user.uid).set({
-                online: true,
-                lastSeen: firebase.firestore.FieldValue.serverTimestamp()
-            }, { merge: true });
-
-            const callListener = db.collection('users').doc(user.uid).collection('calls').onSnapshot(snapshot => {
-                snapshot.docChanges().forEach(change => {
-                    if (change.type === 'added') {
-                        handleIncomingCall(change.doc.data());
-                    }
-                });
-            });
-            callListeners.push(callListener);
-
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                localVideo.srcObject = localStream;
-                localPlaceholder.style.display = 'none';
-                localVideo.style.display = 'block';
-                mediaInitialized = true;
+                const userDoc = await db.collection('users').doc(user.uid).get();
+                if (!userDoc.exists || !userDoc.data().callId) {
+                    console.log('No callId, redirecting to callid.html');
+                    window.location.href = 'callid.html';
+                    return;
+                }
+
+                myCallId = userDoc.data().callId;
+                myCallIdSpan.textContent = myCallId;
+
+                await db.collection('users').doc(user.uid).set({
+                    online: true,
+                    lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+
+                const callListener = db.collection('users').doc(user.uid).collection('calls').onSnapshot(snapshot => {
+                    snapshot.docChanges().forEach(change => {
+                        if (change.type === 'added') {
+                            handleIncomingCall(change.doc.data());
+                        }
+                    });
+                });
+                callListeners.push(callListener);
+
+                try {
+                    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    localVideo.srcObject = localStream;
+                    localPlaceholder.style.display = 'none';
+                    localVideo.style.display = 'block';
+                    mediaInitialized = true;
+                } catch (error) {
+                    console.error('Error accessing media devices:', error);
+                    statusDiv.textContent = 'Could not access camera/microphone. Please grant permissions and refresh.';
+                    mediaInitialized = false;
+                }
             } catch (error) {
-                console.error('Error accessing media devices:', error);
-                statusDiv.textContent = 'Could not access camera/microphone. Please grant permissions and refresh.';
-                mediaInitialized = false;
+                console.error('Error initializing:', error);
+                statusDiv.textContent = 'Error loading user data. Please try logging in again.';
             }
         }
 
@@ -366,64 +373,69 @@
             statusDiv.textContent = `Calling ${targetCallId}...`;
             isCaller = true;
 
-            const targetCallIdDoc = await db.collection('callIds').doc(targetCallId).get();
-            if (!targetCallIdDoc.exists) {
-                statusDiv.textContent = 'Call ID not found';
-                return;
-            }
-
-            const targetUid = targetCallIdDoc.data().uid;
-            await createPeerConnection();
-
-            callDoc = db.collection('calls').doc();
-            const offerCandidates = callDoc.collection('offerCandidates');
-            const answerCandidates = callDoc.collection('answerCandidates');
-
-            await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).set({
-                caller: myCallId,
-                callId: callDoc.id,
-                status: 'calling',
-                timestamp: firebase.firestore.FieldValue.serverTimestamp()
-            });
-
-            const offerDescription = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offerDescription);
-
-            const offer = {
-                sdp: offerDescription.sdp,
-                type: offerDescription.type,
-                caller: myCallId,
-                callee: targetCallId
-            };
-
-            await callDoc.set({ offer });
-
-            const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
-                const data = snapshot.data();
-                if (!peerConnection.currentRemoteDescription && data?.answer) {
-                    const answerDescription = new RTCSessionDescription(data.answer);
-                    await peerConnection.setRemoteDescription(answerDescription);
-                    statusDiv.textContent = `Connected with ${targetCallId}`;
-                    endCallBtn.style.display = 'block';
+            try {
+                const targetCallIdDoc = await db.collection('callIds').doc(targetCallId).get();
+                if (!targetCallIdDoc.exists) {
+                    statusDiv.textContent = 'Call ID not found';
+                    return;
                 }
-            });
-            callListeners.push(callSnapshotListener);
 
-            const answerCandidatesListener = answerCandidates.onSnapshot(snapshot => {
-                snapshot.docChanges().forEach(async change => {
-                    if (change.type === 'added') {
-                        const candidate = new RTCIceCandidate(change.doc.data());
-                        await peerConnection.addIceCandidate(candidate);
+                const targetUid = targetCallIdDoc.data().uid;
+                await createPeerConnection();
+
+                callDoc = db.collection('calls').doc();
+                const offerCandidates = callDoc.collection('offerCandidates');
+                const answerCandidates = callDoc.collection('answerCandidates');
+
+                await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).set({
+                    caller: myCallId,
+                    callId: callDoc.id,
+                    status: 'calling',
+                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                });
+
+                const offerDescription = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offerDescription);
+
+                const offer = {
+                    sdp: offerDescription.sdp,
+                    type: offerDescription.type,
+                    caller: myCallId,
+                    callee: targetCallId
+                };
+
+                await callDoc.set({ offer });
+
+                const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
+                    const data = snapshot.data();
+                    if (!peerConnection.currentRemoteDescription && data?.answer) {
+                        const answerDescription = new RTCSessionDescription(data.answer);
+                        await peerConnection.setRemoteDescription(answerDescription);
+                        statusDiv.textContent = `Connected with ${targetCallId}`;
+                        endCallBtn.style.display = 'block';
                     }
                 });
-            });
-            callListeners.push(answerCandidatesListener);
+                callListeners.push(callSnapshotListener);
 
-            peerConnection.onicecandidate = async event => {
-                if (event.candidate) {
-                    await offerCandidates.add(event.candidate.toJSON());
-                }
-            };
+                const answerCandidatesListener = answerCandidates.onSnapshot(snapshot => {
+                    snapshot.docChanges().forEach(async change => {
+                        if (change.type === 'added') {
+                            const candidate = new RTCIceCandidate(change.doc.data());
+                            await peerConnection.addIceCandidate(candidate);
+                        }
+                    });
+                });
+                callListeners.push(answerCandidatesListener);
+
+                peerConnection.onicecandidate = async event => {
+                    if (event.candidate) {
+                        await offerCandidates.add(event.candidate.toJSON());
+                    }
+                };
+            } catch (error) {
+                console.error('Error starting call:', error);
+                statusDiv.textContent = 'Error starting call. Please try again.';
+            }
         }
 
         // Accept incoming call
@@ -439,64 +451,69 @@
             incomingCallAlert.style.display = 'none';
             statusDiv.textContent = `Connecting with ${callerCallId}...`;
 
-            await createPeerConnection();
+            try {
+                await createPeerConnection();
 
-            const user = auth.currentUser;
-            const callQuery = await db.collection('users').doc(user.uid).collection('calls')
-                .where('caller', '==', callerCallId)
-                .where('status', '==', 'calling')
-                .get();
+                const user = auth.currentUser;
+                const callQuery = await db.collection('users').doc(user.uid).collection('calls')
+                    .where('caller', '==', callerCallId)
+                    .where('status', '==', 'calling')
+                    .get();
 
-            if (callQuery.empty) {
-                statusDiv.textContent = 'Call no longer exists';
-                return;
-            }
-
-            const callData = callQuery.docs[0].data();
-            callDoc = db.collection('calls').doc(callData.callId);
-            const offerCandidates = callDoc.collection('offerCandidates');
-            const answerCandidates = callDoc.collection('answerCandidates');
-
-            await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).update({
-                status: 'answered'
-            });
-
-            const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
-                const data = snapshot.data();
-                if (!peerConnection.currentRemoteDescription && data?.offer) {
-                    const offerDescription = data.offer;
-                    await peerConnection.setRemoteDescription(new RTCSessionDescription(offerDescription));
-
-                    const answerDescription = await peerConnection.createAnswer();
-                    await peerConnection.setLocalDescription(answerDescription);
-
-                    const answer = {
-                        type: answerDescription.type,
-                        sdp: answerDescription.sdp
-                    };
-
-                    await callDoc.update({ answer });
-
-                    statusDiv.textContent = `Connected with ${callerCallId}`;
-                    endCallBtn.style.display = 'block';
+                if (callQuery.empty) {
+                    statusDiv.textContent = 'Call no longer exists';
+                    return;
                 }
-            });
-            callListeners.push(callSnapshotListener);
 
-            const offerCandidatesListener = offerCandidates.onSnapshot(snapshot => {
-                snapshot.docChanges().forEach(async change => {
-                    if (change.type === 'added') {
-                        await peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+                const callData = callQuery.docs[0].data();
+                callDoc = db.collection('calls').doc(callData.callId);
+                const offerCandidates = callDoc.collection('offerCandidates');
+                const answerCandidates = callDoc.collection('answerCandidates');
+
+                await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).update({
+                    status: 'answered'
+                });
+
+                const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
+                    const data = snapshot.data();
+                    if (!peerConnection.currentRemoteDescription && data?.offer) {
+                        const offerDescription = data.offer;
+                        await peerConnection.setRemoteDescription(new RTCSessionDescription(offerDescription));
+
+                        const answerDescription = await peerConnection.createAnswer();
+                        await peerConnection.setLocalDescription(answerDescription);
+
+                        const answer = {
+                            type: answerDescription.type,
+                            sdp: answerDescription.sdp
+                        };
+
+                        await callDoc.update({ answer });
+
+                        statusDiv.textContent = `Connected with ${callerCallId}`;
+                        endCallBtn.style.display = 'block';
                     }
                 });
-            });
-            callListeners.push(offerCandidatesListener);
+                callListeners.push(callSnapshotListener);
 
-            peerConnection.onicecandidate = async event => {
-                if (event.candidate) {
-                    await answerCandidates.add(event.candidate.toJSON());
-                }
-            };
+                const offerCandidatesListener = offerCandidates.onSnapshot(snapshot => {
+                    snapshot.docChanges().forEach(async change => {
+                        if (change.type === 'added') {
+                            await peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+                        }
+                    });
+                });
+                callListeners.push(offerCandidatesListener);
+
+                peerConnection.onicecandidate = async event => {
+                    if (event.candidate) {
+                        await answerCandidates.add(event.candidate.toJSON());
+                    }
+                };
+            } catch (error) {
+                console.error('Error accepting call:', error);
+                statusDiv.textContent = 'Error accepting call. Please try again.';
+            }
         }
 
         // Reject call
@@ -505,16 +522,20 @@
             statusDiv.textContent = 'Call rejected';
             setTimeout(() => statusDiv.textContent = '', 3000);
 
-            const user = auth.currentUser;
-            const callQuery = await db.collection('users').doc(user.uid).collection('calls')
-                .where('caller', '==', callerCallId)
-                .where('status', '==', 'calling')
-                .get();
+            try {
+                const user = auth.currentUser;
+                const callQuery = await db.collection('users').doc(user.uid).collection('calls')
+                    .where('caller', '==', callerCallId)
+                    .where('status', '==', 'calling')
+                    .get();
 
-            if (!callQuery.empty) {
-                await db.collection('users').doc(user.uid).collection('calls').doc(callQuery.docs[0].id).update({
-                    status: 'rejected'
-                });
+                if (!callQuery.empty) {
+                    await db.collection('users').doc(user.uid).collection('calls').doc(callQuery.docs[0].id).update({
+                        status: 'rejected'
+                    });
+                }
+            } catch (error) {
+                console.error('Error rejecting call:', error);
             }
         }
 
@@ -525,23 +546,27 @@
                 peerConnection = null;
             }
 
-            const user = auth.currentUser;
-            if (isCaller && targetCallId && callDoc) {
-                const targetCallIdDoc = await db.collection('callIds').doc(targetCallId).get();
-                if (targetCallIdDoc.exists) {
-                    const targetUid = targetCallIdDoc.data().uid;
-                    await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).update({
-                        status: 'ended'
-                    });
+            try {
+                const user = auth.currentUser;
+                if (isCaller && targetCallId && callDoc) {
+                    const targetCallIdDoc = await db.collection('callIds').doc(targetCallId).get();
+                    if (targetCallIdDoc.exists) {
+                        const targetUid = targetCallIdDoc.data().uid;
+                        await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).update({
+                            status: 'ended'
+                        });
+                    }
+                } else if (callerCallId && callDoc) {
+                    const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
+                    if (callerCallIdDoc.exists) {
+                        const callerUid = callerCallIdDoc.data().uid;
+                        await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).update({
+                            status: 'ended'
+                        });
+                    }
                 }
-            } else if (callerCallId && callDoc) {
-                const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
-                if (callerCallIdDoc.exists) {
-                    const callerUid = callerCallIdDoc.data().uid;
-                    await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).update({
-                        status: 'ended'
-                    });
-                }
+            } catch (error) {
+                console.error('Error ending call:', error);
             }
 
             resetCallState();
@@ -629,16 +654,20 @@
 
         // Clean up when window closes
         window.onbeforeunload = async () => {
-            const user = auth.currentUser;
-            if (user) {
-                await db.collection('users').doc(user.uid).update({
-                    online: false,
-                    lastSeen: firebase.firestore.FieldValue.serverTimestamp()
-                });
-            }
-            resetCallState();
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
+            try {
+                const user = auth.currentUser;
+                if (user) {
+                    await db.collection('users').doc(user.uid).update({
+                        online: false,
+                        lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                }
+                resetCallState();
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                }
+            } catch (error) {
+                console.error('Error during cleanup:', error);
             }
         };
     </script>
