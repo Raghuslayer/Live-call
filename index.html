@@ -110,7 +110,7 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
 
     <script>
-        // Firebase Config
+        // Firebase Config (Replace with your project config)
 const firebaseConfig = {
   apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
   authDomain: "live-call-33ea7.firebaseapp.com",
@@ -161,35 +161,43 @@ const firebaseConfig = {
                     // Redirect handled by onAuthStateChanged
                 } else {
                     await auth.createUserWithEmailAndPassword(email, password);
-                    window.location.href = 'callid.html'; // Always to callid.html after signup
+                    console.log('Signup successful, redirecting to callid.html');
+                    window.location.href = 'callid.html';
                 }
             } catch (error) {
+                console.error('Auth error:', error.message);
                 statusDiv.textContent = error.message;
             }
         }
 
-        // Centralized redirect logic
-        auth.onAuthStateChanged(async user => {
-            if (isRedirecting) return; // Prevent multiple redirects
+        // Centralized redirect logic with delay
+        auth.onAuthStateChanged(user => {
+            if (isRedirecting) {
+                console.log('Redirect already in progress, skipping');
+                return;
+            }
             isRedirecting = true;
 
-            console.log('Auth state changed:', user ? 'User logged in' : 'No user');
+            console.log('Auth state changed:', user ? `User logged in: ${user.uid}` : 'No user');
 
             if (user) {
-                try {
-                    const userDoc = await db.collection('users').doc(user.uid).get();
-                    if (userDoc.exists && userDoc.data().callId) {
-                        console.log('CallId found, redirecting to call.html');
-                        window.location.href = 'call.html';
-                    } else {
-                        console.log('No callId, redirecting to callid.html');
-                        window.location.href = 'callid.html';
+                // Delay redirect to ensure Firestore query completes
+                setTimeout(async () => {
+                    try {
+                        const userDoc = await db.collection('users').doc(user.uid).get();
+                        if (userDoc.exists && userDoc.data().callId) {
+                            console.log(`CallId found: ${userDoc.data().callId}, redirecting to call.html`);
+                            window.location.href = 'call.html';
+                        } else {
+                            console.log('No callId, redirecting to callid.html');
+                            window.location.href = 'callid.html';
+                        }
+                    } catch (error) {
+                        console.error('Error checking callId:', error);
+                        statusDiv.textContent = 'Error checking user data. Please try again.';
+                        isRedirecting = false;
                     }
-                } catch (error) {
-                    console.error('Error checking callId:', error);
-                    statusDiv.textContent = 'Error checking user data. Please try again.';
-                    isRedirecting = false;
-                }
+                }, 500); // 500ms delay for Firestore
             } else {
                 console.log('No user, staying on index.html');
                 isRedirecting = false;
