@@ -288,6 +288,8 @@
         firebase.initializeApp(firebaseConfig);
         const auth = firebase.auth();
         const db = firebase.firestore();
+        // Enable Firestore debug logging
+        firebase.firestore.setLogLevel('debug');
 
         const authContainer = document.getElementById('authContainer');
         const callIdContainer = document.getElementById('callIdContainer');
@@ -450,14 +452,21 @@
                     lastSeen: firebase.firestore.FieldValue.serverTimestamp()
                 }, { merge: true });
 
+                // Clean up old call documents
+                await cleanupOldCalls();
+
                 const callListener = db.collection('users').doc(auth.currentUser.uid).collection('calls').onSnapshot(snapshot => {
+                    console.log('Call listener triggered, changes:', snapshot.docChanges().length);
                     snapshot.docChanges().forEach(change => {
                         if (change.type === 'added' || change.type === 'modified') {
                             const callData = change.doc.data();
-                            console.log('Received call update:', callData);
+                            console.log('Received call update:', callData, 'Doc ID:', change.doc.id);
                             handleIncomingCall(callData, change.doc.id);
                         }
                     });
+                }, error => {
+                    console.error('Call listener error:', error);
+                    callStatus.textContent = 'Error listening for calls: ' + error.message;
                 });
                 callListeners.push(callListener);
 
@@ -479,20 +488,36 @@
             }
         }
 
+        async function cleanupOldCalls() {
+            try {
+                const user = auth.currentUser;
+                const calls = await db.collection('users').doc(user.uid).collection('calls').get();
+                for (const doc of calls.docs) {
+                    const data = doc.data();
+                    if (data.status !== 'calling') {
+                        await doc.ref.delete();
+                        console.log('Deleted old call document:', doc.id);
+                    }
+                }
+            } catch (error) {
+                console.error('Error cleaning up old calls:', error);
+            }
+        }
+
         function handleIncomingCall(callData, callDocId) {
             console.log('Handling incoming call:', callData, 'Doc ID:', callDocId);
-            if (callData.status === 'calling' && !incomingCallAlert.style.display === 'block') {
+            if (callData.status === 'calling' && incomingCallAlert.style.display !== 'block') {
                 callerCallId = callData.caller;
                 callerIdSpan.textContent = callerCallId;
                 incomingCallAlert.style.display = 'block';
                 callStatus.textContent = `Incoming call from ${callerCallId}`;
-                // Store callDocId for use in accept/reject
                 incomingCallAlert.dataset.callDocId = callDocId;
             } else if (callData.status !== 'calling') {
                 incomingCallAlert.style.display = 'none';
                 callStatus.textContent = callData.status === 'ended' ? 'Call ended by the other party' : 
                                         callData.status === 'rejected' ? 'Call was rejected' : 
-                                        callData.status === 'answered' ? 'Call connected' : '';
+                                        callData.status === 'answered' ? 'Call connected' : 
+                                        callData.status === 'completed' ? 'Call completed' : '';
                 if (callStatus.textContent) {
                     setTimeout(() => callStatus.textContent = '', 3000);
                 }
@@ -535,16 +560,20 @@
                 const answerCandidates = callDoc.collection('answerCandidates');
 
                 try {
-                    await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).set({
+                    const callData = {
                         caller: myCallId,
                         callId: callDoc.id,
                         status: 'calling',
                         timestamp: firebase.firestore.FieldValue.serverTimestamp()
-                    });
-                    console.log(`Call notification sent to target user: ${targetUid}`);
+                    };
+                    console.log('Attempting to write call notification:', callData);
+                    await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).set(callData);
+                    console.log(`Call notification written successfully to target user: ${targetUid}, callId: ${callDoc.id}`);
+                    // Wait briefly to ensure Firestore sync
+                    await new Promise(resolve => setTimeout(resolve, 500));
                 } catch (error) {
                     console.error('Failed to notify target user:', error);
-                    callStatus.textContent = 'Failed to initiate call: ' + (error.code === 'permission-denied' ? 'Insufficient permissions. Please contact support.' : error.message);
+                    callStatus.textContent = 'Failed to initiate call: ' + (error.code === 'permission-denied' ? 'Insufficient permissions. Please check Firestore rules.' : error.message);
                     return;
                 }
 
@@ -559,6 +588,7 @@
                 };
 
                 await callDoc.set({ offer });
+                console.log('Offer written to call document:', offer);
 
                 const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
                     const data = snapshot.data();
@@ -569,6 +599,8 @@
                         callStatus.textContent = `Connected with ${targetCallId}`;
                         endCallBtn.style.display = 'block';
                     }
+                }, error => {
+                    console.error('Call snapshot listener error:', error);
                 });
                 callListeners.push(callSnapshotListener);
 
@@ -580,6 +612,8 @@
                             await peerConnection.addIceCandidate(candidate);
                         }
                     });
+                }, error => {
+                    console.error('Answer candidates listener error:', error);
                 });
                 callListeners.push(answerCandidatesListener);
 
@@ -614,7 +648,6 @@
                 const callDocId = incomingCallAlert.dataset.callDocId;
                 console.log('Attempting to accept call with doc ID:', callDocId);
 
-                // Query for the call document
                 const callDocRef = db.collection('users').doc(user.uid).collection('calls').doc(callDocId);
                 const callDocSnap = await callDocRef.get();
 
@@ -631,14 +664,12 @@
                 const offerCandidates = callDoc.collection('offerCandidates');
                 const answerCandidates = callDoc.collection('answerCandidates');
 
-                // Mark the call as answered
                 await callDocRef.update({
                     status: 'answered',
                     answeredAt: firebase.firestore.FieldValue.serverTimestamp()
                 });
                 console.log('Call marked as answered in user’s calls collection');
 
-                // Wait briefly to ensure Firestore sync
                 await new Promise(resolve => setTimeout(resolve, 500));
 
                 const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
@@ -663,13 +694,14 @@
                         callStatus.textContent = `Connected with ${callerCallId}`;
                         endCallBtn.style.display = 'block';
 
-                        // Clean up the call notification
                         await callDocRef.update({
                             status: 'completed',
                             completedAt: firebase.firestore.FieldValue.serverTimestamp()
                         });
                         console.log('Call notification marked as completed');
                     }
+                }, error => {
+                    console.error('Call snapshot listener error:', error);
                 });
                 callListeners.push(callSnapshotListener);
 
@@ -681,6 +713,8 @@
                             await peerConnection.addIceCandidate(candidate);
                         }
                     });
+                }, error => {
+                    console.error('Offer candidates listener error:', error);
                 });
                 callListeners.push(offerCandidatesListener);
 
@@ -713,7 +747,6 @@
                 });
                 console.log('Call marked as rejected');
 
-                // Notify caller
                 if (callerCallId && callDoc) {
                     const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
                     if (callerCallIdDoc.exists) {
@@ -749,7 +782,6 @@
                         });
                         console.log('Target user notified of call end');
                     }
-                    // Clean up caller’s call document
                     await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).update({
                         status: 'ended',
                         endedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -765,7 +797,6 @@
                         });
                         console.log('Caller notified of call end');
                     }
-                    // Clean up callee’s call document
                     await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).update({
                         status: 'ended',
                         endedAt: firebase.firestore.FieldValue.serverTimestamp()
