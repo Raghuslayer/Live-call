@@ -321,6 +321,8 @@
         let callDoc;
         let callListeners = [];
         let isMediaStreamInitialized = false;
+        let isCallActive = false;
+        let pendingIceCandidates = [];
 
         function showSection(section) {
             console.log(`Showing section: ${section.id}`);
@@ -378,7 +380,9 @@
             }
 
             try {
-                const callIdDoc = await db.collection('callIds').doc(callId).get();
+                const callIdDoc = await retryFirestoreOperation(() =>
+                    db.collection('callIds').doc(callId).get()
+                );
                 if (callIdDoc.exists) {
                     callIdStatus.textContent = 'Call ID already taken, please choose another';
                     return;
@@ -386,15 +390,14 @@
 
                 const user = auth.currentUser;
                 await retryFirestoreOperation(() =>
-                    db.collection('users').doc(user.uid).set({
-                        callId: callId,
-                        online: true,
-                        lastSeen: firebase.firestore.FieldValue.serverTimestamp()
-                    }, { merge: true })
-                );
-
-                await retryFirestoreOperation(() =>
-                    db.collection('callIds').doc(callId).set({ uid: user.uid })
+                    db.runTransaction(async transaction => {
+                        transaction.set(db.collection('users').doc(user.uid), {
+                            callId: callId,
+                            online: true,
+                            lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+                        }, { merge: true });
+                        transaction.set(db.collection('callIds').doc(callId), { uid: user.uid });
+                    })
                 );
                 console.log(`CallId ${callId} saved, initializing call section`);
                 myCallId = callId;
@@ -421,6 +424,11 @@
 
         async function resetCallState() {
             console.log('Resetting call state');
+            if (isCallActive) {
+                console.log('Call still active, waiting for cleanup');
+                return;
+            }
+
             if (peerConnection) {
                 peerConnection.close();
                 peerConnection = null;
@@ -429,28 +437,45 @@
                 remoteStream.getTracks().forEach(track => track.stop());
                 remoteStream = null;
             }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+                isMediaStreamInitialized = false;
+            }
+
             remoteVideo.srcObject = null;
+            localVideo.srcObject = null;
             remotePlaceholder.style.display = 'block';
             remoteVideo.style.display = 'none';
+            localPlaceholder.style.display = 'block';
+            localVideo.style.display = 'none';
             endCallBtn.style.display = 'none';
             incomingCallAlert.style.display = 'none';
             targetCallId = null;
             callerCallId = null;
             isCaller = false;
             callDoc = null;
-            callListeners.forEach(unsubscribe => unsubscribe());
-            callListeners = [];
-            callStatus.textContent = '';
+            pendingIceCandidates = [];
 
-            // Only reinitialize localStream if not in the middle of starting a call
-            if (!isCaller && !targetCallId) {
+            callListeners.forEach(unsubscribe => {
                 try {
-                    await initMediaStream();
-                    console.log('Local stream reinitialized after reset');
+                    unsubscribe();
                 } catch (error) {
-                    console.error('Error reinitializing local stream:', error);
+                    console.error('Error unsubscribing listener:', error);
+                }
+            });
+            callListeners = [];
+
+            try {
+                await cleanupOldCalls();
+                console.log('Old calls cleaned up');
+                const mediaSuccess = await initMediaStream();
+                if (!mediaSuccess) {
                     callStatus.textContent = 'Failed to reinitialize camera/microphone';
                 }
+            } catch (error) {
+                console.error('Error during state reset:', error);
+                callStatus.textContent = 'Error resetting state: ' + error.message;
             }
         }
 
@@ -526,10 +551,30 @@
                 const calls = await retryFirestoreOperation(() =>
                     db.collection('users').doc(user.uid).collection('calls').get()
                 );
-                for (const doc of calls.docs) {
-                    await retryFirestoreOperation(() => doc.ref.delete());
+                const callDocs = await retryFirestoreOperation(() =>
+                    db.collection('calls').get()
+                );
+
+                const deletePromises = [];
+                calls.docs.forEach(doc => {
+                    deletePromises.push(retryFirestoreOperation(() => doc.ref.delete()));
+                    console.log('Deleted user call document:', doc.id);
+                });
+                callDocs.docs.forEach(doc => {
+                    deletePromises.push(retryFirestoreOperation(() => doc.ref.delete()));
                     console.log('Deleted call document:', doc.id);
-                }
+                    const offerCandidates = doc.ref.collection('offerCandidates');
+                    const answerCandidates = doc.ref.collection('answerCandidates');
+                    deletePromises.push(
+                        retryFirestoreOperation(() => offerCandidates.get()).then(snapshot =>
+                            Promise.all(snapshot.docs.map(d => retryFirestoreOperation(() => d.ref.delete())))
+                        ),
+                        retryFirestoreOperation(() => answerCandidates.get()).then(snapshot =>
+                            Promise.all(snapshot.docs.map(d => retryFirestoreOperation(() => d.ref.delete())))
+                        )
+                    );
+                });
+                await Promise.all(deletePromises);
             } catch (error) {
                 console.error('Error cleaning up old calls:', error);
             }
@@ -549,6 +594,14 @@
 
         function handleIncomingCall(callData, callDocId) {
             console.log('Handling incoming call:', callData, 'Doc ID:', callDocId);
+            if (isCallActive) {
+                console.log('Another call is active, rejecting new call');
+                retryFirestoreOperation(() =>
+                    db.collection('users').doc(auth.currentUser.uid).collection('calls').doc(callDocId).delete()
+                );
+                return;
+            }
+
             if (callData.status === 'calling') {
                 const now = new Date();
                 const callTime = callData.timestamp?.toDate();
@@ -592,20 +645,29 @@
         }
 
         async function startCall() {
+            if (isCallActive) {
+                callStatus.textContent = 'Another call is active. Please end the current call first.';
+                return;
+            }
+            isCallActive = true;
+
             console.log('Starting call, ensuring media stream is initialized');
             const mediaSuccess = await initMediaStream();
             if (!mediaSuccess) {
                 callStatus.textContent = 'Failed to access camera/microphone';
+                isCallActive = false;
                 return;
             }
 
             targetCallId = document.getElementById('targetCallId').value.trim();
             if (!targetCallId) {
                 callStatus.textContent = 'Please enter a Call ID to call';
+                isCallActive = false;
                 return;
             }
             if (targetCallId === myCallId) {
                 callStatus.textContent = "You can't call yourself";
+                isCallActive = false;
                 return;
             }
 
@@ -618,6 +680,7 @@
                 );
                 if (!targetCallIdDoc.exists) {
                     callStatus.textContent = 'Call ID not found';
+                    isCallActive = false;
                     return;
                 }
 
@@ -636,7 +699,12 @@
                 };
                 console.log('Attempting to write call notification:', callData);
                 await retryFirestoreOperation(() =>
-                    db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).set(callData)
+                    db.runTransaction(async transaction => {
+                        transaction.set(
+                            db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id),
+                            callData
+                        );
+                    })
                 );
                 console.log(`Call notification written to target user: ${targetUid}, callId: ${callDoc.id}`);
 
@@ -659,6 +727,13 @@
                     if (!peerConnection.currentRemoteDescription && data?.answer) {
                         const answerDescription = new RTCSessionDescription(data.answer);
                         await peerConnection.setRemoteDescription(answerDescription);
+                        // Apply any pending ICE candidates
+                        for (const candidate of pendingIceCandidates) {
+                            await peerConnection.addIceCandidate(candidate).catch(error => {
+                                console.error('Error applying pending ICE candidate:', error);
+                            });
+                        }
+                        pendingIceCandidates = [];
                         callStatus.textContent = `Connected with ${targetCallId}`;
                         endCallBtn.style.display = 'block';
                     }
@@ -668,6 +743,7 @@
                     }
                 }, error => {
                     console.error('Call snapshot listener error:', error);
+                    callStatus.textContent = 'Error in call connection: ' + error.message;
                 });
                 callListeners.push(callSnapshotListener);
 
@@ -676,9 +752,14 @@
                         if (change.type === 'added') {
                             console.log('Received answer candidate:', change.doc.data());
                             const candidate = new RTCIceCandidate(change.doc.data());
-                            await peerConnection.addIceCandidate(candidate).catch(error => {
-                                console.error('Error adding ICE candidate:', error);
-                            });
+                            if (peerConnection.currentRemoteDescription) {
+                                await peerConnection.addIceCandidate(candidate).catch(error => {
+                                    console.error('Error adding ICE candidate:', error);
+                                });
+                            } else {
+                                pendingIceCandidates.push(candidate);
+                                console.log('Buffered ICE candidate:', candidate);
+                            }
                         }
                     });
                 }, error => {
@@ -705,15 +786,24 @@
                 console.error('Error starting call:', error);
                 callStatus.textContent = 'Error starting call: ' + error.message;
                 await resetCallState();
+                isCallActive = false;
             }
         }
 
         async function acceptCall() {
+            if (isCallActive) {
+                callStatus.textContent = 'Another call is active. Please end the current call first.';
+                incomingCallAlert.style.display = 'none';
+                return;
+            }
+            isCallActive = true;
+
             console.log('Accepting call, ensuring media stream is initialized');
             const mediaSuccess = await initMediaStream();
             if (!mediaSuccess) {
                 incomingCallAlert.style.display = 'none';
                 callStatus.textContent = 'Failed to access camera/microphone';
+                isCallActive = false;
                 return;
             }
 
@@ -734,6 +824,7 @@
                     console.error('Call document not found:', callDocId);
                     callStatus.textContent = 'Call no longer exists';
                     await retryFirestoreOperation(() => callDocRef.delete());
+                    isCallActive = false;
                     return;
                 }
 
@@ -745,9 +836,11 @@
                 const answerCandidates = callDoc.collection('answerCandidates');
 
                 await retryFirestoreOperation(() =>
-                    callDocRef.update({
-                        status: 'answered',
-                        answeredAt: firebase.firestore.FieldValue.serverTimestamp()
+                    db.runTransaction(async transaction => {
+                        transaction.update(callDocRef, {
+                            status: 'answered',
+                            answeredAt: firebase.firestore.FieldValue.serverTimestamp()
+                        });
                     })
                 );
                 console.log('Call marked as answered');
@@ -771,6 +864,14 @@
                         await retryFirestoreOperation(() => callDoc.update({ answer }));
                         console.log('Answer sent to call document:', answer);
 
+                        // Apply any pending ICE candidates
+                        for (const candidate of pendingIceCandidates) {
+                            await peerConnection.addIceCandidate(candidate).catch(error => {
+                                console.error('Error applying pending ICE candidate:', error);
+                            });
+                        }
+                        pendingIceCandidates = [];
+
                         callStatus.textContent = `Connected with ${callerCallId}`;
                         endCallBtn.style.display = 'block';
 
@@ -783,6 +884,7 @@
                     }
                 }, error => {
                     console.error('Call snapshot listener error:', error);
+                    callStatus.textContent = 'Error in call connection: ' + error.message;
                 });
                 callListeners.push(callSnapshotListener);
 
@@ -791,9 +893,14 @@
                         if (change.type === 'added') {
                             console.log('Received offer candidate:', change.doc.data());
                             const candidate = new RTCIceCandidate(change.doc.data());
-                            await peerConnection.addIceCandidate(candidate).catch(error => {
-                                console.error('Error adding ICE candidate:', error);
-                            });
+                            if (peerConnection.currentRemoteDescription) {
+                                await peerConnection.addIceCandidate(candidate).catch(error => {
+                                    console.error('Error adding ICE candidate:', error);
+                                });
+                            } else {
+                                pendingIceCandidates.push(candidate);
+                                console.log('Buffered ICE candidate:', candidate);
+                            }
                         }
                     });
                 }, error => {
@@ -813,6 +920,7 @@
                 console.error('Error accepting call:', error);
                 callStatus.textContent = 'Error accepting call: ' + error.message;
                 await resetCallState();
+                isCallActive = false;
             }
         }
 
@@ -848,10 +956,13 @@
             }
 
             await resetCallState();
+            isCallActive = false;
         }
 
         async function endCall() {
             console.log('Ending call');
+            isCallActive = false;
+
             if (peerConnection) {
                 peerConnection.close();
                 peerConnection = null;
@@ -900,6 +1011,22 @@
                         callDoc.update({ status: 'ended', endedAt: firebase.firestore.FieldValue.serverTimestamp() })
                     );
                 }
+
+                // Clean up call document and collections
+                if (callDoc) {
+                    const offerCandidates = callDoc.collection('offerCandidates');
+                    const answerCandidates = callDoc.collection('answerCandidates');
+                    const [offerSnapshot, answerSnapshot] = await Promise.all([
+                        retryFirestoreOperation(() => offerCandidates.get()),
+                        retryFirestoreOperation(() => answerCandidates.get())
+                    ]);
+                    await Promise.all([
+                        ...offerSnapshot.docs.map(doc => retryFirestoreOperation(() => doc.ref.delete())),
+                        ...answerSnapshot.docs.map(doc => retryFirestoreOperation(() => doc.ref.delete())),
+                        retryFirestoreOperation(() => callDoc.delete())
+                    ]);
+                    console.log('Call document and candidates cleaned up');
+                }
             } catch (error) {
                 console.error('Error ending call:', error);
                 callStatus.textContent = 'Error ending call: ' + error.message;
@@ -924,7 +1051,12 @@
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' }
+                    { urls: 'stun:stun2.l.google.com:19302' },
+                    {
+                        urls: 'turn:relay1.expressturn.com:3478',
+                        username: 'efLAXE6876DKJ13QAR',
+                        credential: 'Y8jbmsIFdQ8DxM0a'
+                    }
                 ]
             };
 
@@ -944,30 +1076,77 @@
                 if (event.streams[0]) {
                     event.streams[0].getTracks().forEach(track => {
                         remoteStream.addTrack(track);
-                        console.log('Added remote track:', track);
+                        console.log('Added remote track:', track, 'Type:', track.kind);
                     });
                     remoteVideo.srcObject = remoteStream;
                     remotePlaceholder.style.display = 'none';
                     remoteVideo.style.display = 'block';
+                    const videoTracks = remoteStream.getVideoTracks();
+                    const audioTracks = remoteStream.getAudioTracks();
+                    console.log('Remote stream tracks:', { video: videoTracks.length, audio: audioTracks.length });
+                    if (videoTracks.length === 0) {
+                        callStatus.textContent = 'No remote video stream received';
+                    }
+                    if (audioTracks.length === 0) {
+                        callStatus.textContent = 'No remote audio stream received';
+                    }
                 }
             };
 
-            peerConnection.onconnectionstatechange = () => {
+            peerConnection.onconnectionstatechange = async () => {
                 console.log('Connection state:', peerConnection.connectionState);
                 if (peerConnection.connectionState === 'disconnected' || 
                     peerConnection.connectionState === 'failed') {
-                    console.log('Connection failed or disconnected, ending call');
-                    endCall();
+                    console.log('Connection failed or disconnected, attempting recovery');
+                    try {
+                        await peerConnection.restartIce();
+                        console.log('ICE restart initiated');
+                    } catch (error) {
+                        console.error('Error restarting ICE:', error);
+                        callStatus.textContent = 'Connection lost';
+                        endCall();
+                    }
                 } else if (peerConnection.connectionState === 'connected') {
                     console.log('Peer connection established successfully');
                 }
             };
 
-            peerConnection.oniceconnectionstatechange = () => {
+            peerConnection.oniceconnectionstatechange = async () => {
                 console.log('ICE connection state:', peerConnection.iceConnectionState);
                 if (peerConnection.iceConnectionState === 'failed') {
-                    console.log('Restarting ICE');
-                    peerConnection.restartIce();
+                    console.log('ICE connection failed, restarting ICE');
+                    try {
+                        await peerConnection.restartIce();
+                        console.log('ICE restart initiated');
+                    } catch (error) {
+                        console.error('Error restarting ICE:', error);
+                        callStatus.textContent = 'ICE connection failed';
+                        endCall();
+                    }
+                }
+            };
+
+            peerConnection.onnegotiationneeded = async () => {
+                if (isCaller) {
+                    console.log('Negotiation needed, creating new offer');
+                    try {
+                        const offer = await peerConnection.createOffer();
+                        await peerConnection.setLocalDescription(offer);
+                        await retryFirestoreOperation(() =>
+                            callDoc.update({
+                                offer: {
+                                    sdp: offer.sdp,
+                                    type: offer.type,
+                                    caller: myCallId,
+                                    callee: targetCallId
+                                }
+                            })
+                        );
+                        console.log('New offer sent for renegotiation');
+                    } catch (error) {
+                        console.error('Error during renegotiation:', error);
+                        callStatus.textContent = 'Error renegotiating connection';
+                    }
                 }
             };
         }
