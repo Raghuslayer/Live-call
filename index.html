@@ -276,15 +276,14 @@
     <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
 
     <script>
-const firebaseConfig = {
-  apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
-  authDomain: "live-call-33ea7.firebaseapp.com",
-  projectId: "live-call-33ea7",
-  storageBucket: "live-call-33ea7.firebasestorage.app",
-  messagingSenderId: "518167322129",
-  appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
-};
-
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
 
         firebase.initializeApp(firebaseConfig);
         const auth = firebase.auth();
@@ -328,7 +327,6 @@ const firebaseConfig = {
             callIdContainer.classList.remove('active');
             callContainer.classList.remove('active');
             section.classList.add('active');
-            // Force reflow to ensure DOM update
             section.offsetHeight;
         }
 
@@ -379,6 +377,7 @@ const firebaseConfig = {
             }
 
             try {
+                console.log('Checking if callId exists:', callId);
                 const callIdDoc = await db.collection('callIds').doc(callId).get();
                 if (callIdDoc.exists) {
                     callIdStatus.textContent = 'Call ID already taken, please choose another';
@@ -386,6 +385,7 @@ const firebaseConfig = {
                 }
 
                 const user = auth.currentUser;
+                console.log('Saving callId for user:', user.uid);
                 await db.collection('users').doc(user.uid).set({
                     callId: callId,
                     online: true,
@@ -399,7 +399,8 @@ const firebaseConfig = {
                 showSection(callContainer);
             } catch (error) {
                 console.error('Error saving callId:', error);
-                callIdStatus.textContent = error.message;
+                callIdStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                    ? 'Network error: Please disable ad blockers and try again.' : error.message;
             }
         }
 
@@ -445,20 +446,30 @@ const firebaseConfig = {
                 console.log('Initializing call section for callId:', myCallId);
                 myCallIdSpan.textContent = myCallId;
 
+                console.log('Updating user online status');
                 await db.collection('users').doc(auth.currentUser.uid).set({
                     online: true,
                     lastSeen: firebase.firestore.FieldValue.serverTimestamp()
-                }, { merge: true });
+                }, { merge: true }).catch(error => {
+                    console.error('Error updating online status:', error);
+                    throw new Error('Failed to update online status: ' + error.message);
+                });
 
+                console.log('Setting up call listener');
                 const callListener = db.collection('users').doc(auth.currentUser.uid).collection('calls').onSnapshot(snapshot => {
                     snapshot.docChanges().forEach(change => {
                         if (change.type === 'added') {
                             handleIncomingCall(change.doc.data());
                         }
                     });
+                }, error => {
+                    console.error('Error in call listener:', error);
+                    callStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                        ? 'Network error: Please disable ad blockers and try again.' : 'Error setting up call listener';
                 });
                 callListeners.push(callListener);
 
+                console.log('Requesting media devices');
                 try {
                     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                     localVideo.srcObject = localStream;
@@ -473,7 +484,8 @@ const firebaseConfig = {
                 }
             } catch (error) {
                 console.error('Error initializing call section:', error);
-                callStatus.textContent = 'Error loading call data. Please sign out and try again.';
+                callStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                    ? 'Network error: Please disable ad blockers and try again.' : 'Error loading call data: ' + error.message;
             }
         }
 
@@ -514,26 +526,36 @@ const firebaseConfig = {
             isCaller = true;
 
             try {
-                const targetCallIdDoc = await db.collection('callIds').doc(targetCallId).get();
+                console.log('Checking target callId:', targetCallId);
+                const targetCallIdDoc = await db.collection('callIds').doc(targetCallId).get().catch(error => {
+                    console.error('Error checking target callId:', error);
+                    throw new Error('Failed to check target callId: ' + error.message);
+                });
                 if (!targetCallIdDoc.exists) {
                     callStatus.textContent = 'Call ID not found';
                     return;
                 }
 
                 const targetUid = targetCallIdDoc.data().uid;
+                console.log('Creating peer connection');
                 await createPeerConnection();
 
                 callDoc = db.collection('calls').doc();
                 const offerCandidates = callDoc.collection('offerCandidates');
                 const answerCandidates = callDoc.collection('answerCandidates');
 
+                console.log('Notifying target user of call:', targetUid);
                 await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).set({
                     caller: myCallId,
                     callId: callDoc.id,
                     status: 'calling',
                     timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                }).catch(error => {
+                    console.error('Error notifying target user:', error);
+                    throw new Error('Failed to notify target user: ' + error.message);
                 });
 
+                console.log('Creating WebRTC offer');
                 const offerDescription = await peerConnection.createOffer();
                 await peerConnection.setLocalDescription(offerDescription);
 
@@ -544,8 +566,13 @@ const firebaseConfig = {
                     callee: targetCallId
                 };
 
-                await callDoc.set({ offer });
+                console.log('Saving offer to Firestore');
+                await callDoc.set({ offer }).catch(error => {
+                    console.error('Error saving offer:', error);
+                    throw new Error('Failed to save offer: ' + error.message);
+                });
 
+                console.log('Setting up call snapshot listener');
                 const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
                     const data = snapshot.data();
                     if (!peerConnection.currentRemoteDescription && data?.answer) {
@@ -554,9 +581,14 @@ const firebaseConfig = {
                         callStatus.textContent = `Connected with ${targetCallId}`;
                         endCallBtn.style.display = 'block';
                     }
+                }, error => {
+                    console.error('Error in call snapshot listener:', error);
+                    callStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                        ? 'Network error: Please disable ad blockers and try again.' : 'Error listening for call updates';
                 });
                 callListeners.push(callSnapshotListener);
 
+                console.log('Setting up answer candidates listener');
                 const answerCandidatesListener = answerCandidates.onSnapshot(snapshot => {
                     snapshot.docChanges().forEach(async change => {
                         if (change.type === 'added') {
@@ -564,17 +596,27 @@ const firebaseConfig = {
                             await peerConnection.addIceCandidate(candidate);
                         }
                     });
+                }, error => {
+                    console.error('Error in answer candidates listener:', error);
+                    callStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                        ? 'Network error: Please disable ad blockers and try again.' : 'Error receiving ICE candidates';
                 });
                 callListeners.push(answerCandidatesListener);
 
                 peerConnection.onicecandidate = async event => {
                     if (event.candidate) {
-                        await offerCandidates.add(event.candidate.toJSON());
+                        console.log('Saving ICE candidate');
+                        await offerCandidates.add(event.candidate.toJSON()).catch(error => {
+                            console.error('Error saving ICE candidate:', error);
+                            callStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                                ? 'Network error: Please disable ad blockers and try again.' : 'Error saving ICE candidate';
+                        });
                     }
                 };
             } catch (error) {
                 console.error('Error starting call:', error);
-                callStatus.textContent = 'Error starting call. Please try again.';
+                callStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                    ? 'Network error: Please disable ad blockers and try again.' : 'Error starting call: ' + error.message;
             }
         }
 
@@ -594,10 +636,14 @@ const firebaseConfig = {
                 await createPeerConnection();
 
                 const user = auth.currentUser;
+                console.log('Querying incoming call from:', callerCallId);
                 const callQuery = await db.collection('users').doc(user.uid).collection('calls')
                     .where('caller', '==', callerCallId)
                     .where('status', '==', 'calling')
-                    .get();
+                    .get().catch(error => {
+                        console.error('Error querying incoming call:', error);
+                        throw new Error('Failed to query incoming call: ' + error.message);
+                    });
 
                 if (callQuery.empty) {
                     callStatus.textContent = 'Call no longer exists';
@@ -609,10 +655,15 @@ const firebaseConfig = {
                 const offerCandidates = callDoc.collection('offerCandidates');
                 const answerCandidates = callDoc.collection('answerCandidates');
 
+                console.log('Updating call status to answered');
                 await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).update({
                     status: 'answered'
+                }).catch(error => {
+                    console.error('Error updating call status:', error);
+                    throw new Error('Failed to update call status: ' + error.message);
                 });
 
+                console.log('Setting up call snapshot listener for answer');
                 const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
                     const data = snapshot.data();
                     if (!peerConnection.currentRemoteDescription && data?.offer) {
@@ -627,31 +678,50 @@ const firebaseConfig = {
                             sdp: answerDescription.sdp
                         };
 
-                        await callDoc.update({ answer });
+                        console.log('Saving answer to Firestore');
+                        await callDoc.update({ answer }).catch(error => {
+                            console.error('Error saving answer:', error);
+                            throw new Error('Failed to save answer: ' + error.message);
+                        });
 
                         callStatus.textContent = `Connected with ${callerCallId}`;
                         endCallBtn.style.display = 'block';
                     }
+                }, error => {
+                    console.error('Error in call snapshot listener:', error);
+                    callStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                        ? 'Network error: Please disable ad blockers and try again.' : 'Error listening for call updates';
                 });
                 callListeners.push(callSnapshotListener);
 
+                console.log('Setting up offer candidates listener');
                 const offerCandidatesListener = offerCandidates.onSnapshot(snapshot => {
                     snapshot.docChanges().forEach(async change => {
                         if (change.type === 'added') {
                             await peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
                         }
                     });
+                }, error => {
+                    console.error('Error in offer candidates listener:', error);
+                    callStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                        ? 'Network error: Please disable ad blockers and try again.' : 'Error receiving ICE candidates';
                 });
                 callListeners.push(offerCandidatesListener);
 
                 peerConnection.onicecandidate = async event => {
                     if (event.candidate) {
-                        await answerCandidates.add(event.candidate.toJSON());
+                        console.log('Saving ICE candidate');
+                        await answerCandidates.add(event.candidate.toJSON()).catch(error => {
+                            console.error('Error saving ICE candidate:', error);
+                            callStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                                ? 'Network error: Please disable ad blockers and try again.' : 'Error saving ICE candidate';
+                        });
                     }
                 };
             } catch (error) {
                 console.error('Error accepting call:', error);
-                callStatus.textContent = 'Error accepting call. Please try again.';
+                callStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                    ? 'Network error: Please disable ad blockers and try again.' : 'Error accepting call: ' + error.message;
             }
         }
 
@@ -662,6 +732,7 @@ const firebaseConfig = {
 
             try {
                 const user = auth.currentUser;
+                console.log('Rejecting call from:', callerCallId);
                 const callQuery = await db.collection('users').doc(user.uid).collection('calls')
                     .where('caller', '==', callerCallId)
                     .where('status', '==', 'calling')
@@ -674,6 +745,8 @@ const firebaseConfig = {
                 }
             } catch (error) {
                 console.error('Error rejecting call:', error);
+                callStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                    ? 'Network error: Please disable ad blockers and try again.' : 'Error rejecting call';
             }
         }
 
@@ -686,6 +759,7 @@ const firebaseConfig = {
             try {
                 const user = auth.currentUser;
                 if (isCaller && targetCallId && callDoc) {
+                    console.log('Ending call as caller, notifying:', targetCallId);
                     const targetCallIdDoc = await db.collection('callIds').doc(targetCallId).get();
                     if (targetCallIdDoc.exists) {
                         const targetUid = targetCallIdDoc.data().uid;
@@ -694,6 +768,7 @@ const firebaseConfig = {
                         });
                     }
                 } else if (callerCallId && callDoc) {
+                    console.log('Ending call as callee, notifying:', callerCallId);
                     const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
                     if (callerCallIdDoc.exists) {
                         const callerUid = callerCallIdDoc.data().uid;
@@ -704,6 +779,8 @@ const firebaseConfig = {
                 }
             } catch (error) {
                 console.error('Error ending call:', error);
+                callStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                    ? 'Network error: Please disable ad blockers and try again.' : 'Error ending call';
             }
 
             resetCallState();
@@ -788,9 +865,11 @@ const firebaseConfig = {
             if (user) {
                 console.log('Checking user data in Firestore...');
                 try {
-                    // Add slight delay to ensure Firestore is ready
                     await new Promise(resolve => setTimeout(resolve, 500));
-                    const userDoc = await db.collection('users').doc(user.uid).get();
+                    const userDoc = await db.collection('users').doc(user.uid).get().catch(error => {
+                        console.error('Error fetching user doc:', error);
+                        throw new Error('Failed to fetch user data: ' + error.message);
+                    });
                     console.log('Firestore query completed, exists:', userDoc.exists, 'data:', userDoc.data());
 
                     if (userDoc.exists && userDoc.data().callId) {
@@ -798,7 +877,7 @@ const firebaseConfig = {
                         myCallId = userDoc.data().callId;
                         await initCallSection();
                         showSection(callContainer);
-                        authStatus.textContent = ''; // Clear login status
+                        authStatus.textContent = '';
                     } else {
                         console.log('No callId found, showing call ID creation');
                         showSection(callIdContainer);
@@ -806,7 +885,8 @@ const firebaseConfig = {
                     }
                 } catch (error) {
                     console.error('Error checking user data:', error);
-                    authStatus.textContent = 'Error loading user data: ' + error.message;
+                    authStatus.textContent = error.message.includes('network') || error.message.includes('blocked') 
+                        ? 'Network error: Please disable ad blockers and try again.' : 'Error loading user data: ' + error.message;
                 }
             } else {
                 console.log('No user, showing auth section');
