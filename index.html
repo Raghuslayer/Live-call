@@ -424,24 +424,31 @@
 
         async function resetCallState() {
             console.log('Resetting call state');
-            if (isCallActive) {
-                console.log('Call still active, waiting for cleanup');
-                return;
-            }
+            isCallActive = false;
 
             // Close and nullify WebRTC resources
             if (peerConnection) {
-                peerConnection.close();
+                try {
+                    peerConnection.close();
+                } catch (e) {
+                    console.error('Error closing peerConnection:', e);
+                }
                 peerConnection = null;
                 console.log('PeerConnection closed');
             }
             if (remoteStream) {
-                remoteStream.getTracks().forEach(track => track.stop());
+                remoteStream.getTracks().forEach(track => {
+                    track.stop();
+                    console.log('Stopped remote track:', track.kind);
+                });
                 remoteStream = null;
                 console.log('Remote stream stopped');
             }
             if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
+                localStream.getTracks().forEach(track => {
+                    track.stop();
+                    console.log('Stopped local track:', track.kind);
+                });
                 localStream = null;
                 isMediaStreamInitialized = false;
                 console.log('Local stream stopped');
@@ -463,23 +470,24 @@
             pendingIceCandidates = [];
 
             // Unsubscribe all listeners
-            callListeners.forEach(unsubscribe => {
+            console.log('Unsubscribing listeners, count:', callListeners.length);
+            while (callListeners.length > 0) {
+                const unsubscribe = callListeners.pop();
                 try {
                     unsubscribe();
                 } catch (error) {
                     console.error('Error unsubscribing listener:', error);
                 }
-            });
-            callListeners = [];
+            }
             console.log('All listeners unsubscribed');
 
             try {
                 await cleanupOldCalls();
-                console.log('Old calls cleaned up');
+                console.log('Firestore cleanup completed');
                 // Reinitialize media stream for next call
                 const mediaSuccess = await initMediaStream();
                 if (!mediaSuccess) {
-                    callStatus.textContent = 'Failed to reinitialize camera/microphone';
+                    callStatus.textContent = 'Failed to reinitialize camera/microphone. Please grant permissions.';
                 }
             } catch (error) {
                 console.error('Error during state reset:', error);
@@ -488,26 +496,29 @@
         }
 
         async function initMediaStream() {
-            if (isMediaStreamInitialized && localStream?.active) {
-                console.log('Media stream already initialized and active');
-                return true;
+            console.log('Initializing media stream');
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    track.stop();
+                    console.log('Stopped existing track:', track.kind);
+                });
+                localStream = null;
             }
 
             try {
-                console.log('Initializing media stream');
-                if (localStream) {
-                    localStream.getTracks().forEach(track => track.stop());
-                    localStream = null;
-                }
-                localStream = await navigator.mediaDevices.getUserMedia({ 
+                localStream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: 'user' },
-                    audio: true 
+                    audio: true
                 });
                 localVideo.srcObject = localStream;
                 localPlaceholder.style.display = 'none';
                 localVideo.style.display = 'block';
                 isMediaStreamInitialized = true;
-                console.log('Media stream initialized:', localStream.getTracks());
+                console.log('Media stream initialized with tracks:', localStream.getTracks().map(t => ({
+                    kind: t.kind,
+                    enabled: t.enabled,
+                    readyState: t.readyState
+                })));
                 return true;
             } catch (error) {
                 console.error('Error initializing media stream:', error);
@@ -548,7 +559,7 @@
 
                 const mediaSuccess = await initMediaStream();
                 if (!mediaSuccess) {
-                    callStatus.textContent = 'Media initialization failed. Please grant permissions and refresh.';
+                    callStatus.textContent = 'Media initialization failed. Please grant permissions.';
                 }
             } catch (error) {
                 console.error('Error initializing call section:', error);
@@ -663,7 +674,7 @@
             }
             isCallActive = true;
 
-            console.log('Starting call, ensuring media stream is initialized');
+            console.log('Starting call');
             const mediaSuccess = await initMediaStream();
             if (!mediaSuccess) {
                 callStatus.textContent = 'Failed to access camera/microphone';
@@ -709,7 +720,6 @@
                     status: 'calling',
                     timestamp: firebase.firestore.FieldValue.serverTimestamp()
                 };
-                console.log('Attempting to write call notification:', callData);
                 await retryFirestoreOperation(() =>
                     db.runTransaction(async transaction => {
                         transaction.set(
@@ -739,10 +749,10 @@
                     if (!peerConnection.currentRemoteDescription && data?.answer) {
                         const answerDescription = new RTCSessionDescription(data.answer);
                         await peerConnection.setRemoteDescription(answerDescription);
-                        // Apply any pending ICE candidates
+                        console.log('Remote description set, applying ICE candidates');
                         for (const candidate of pendingIceCandidates) {
                             await peerConnection.addIceCandidate(candidate).catch(error => {
-                                console.error('Error applying pending ICE candidate:', error);
+                                console.error('Error applying ICE candidate:', error);
                             });
                         }
                         pendingIceCandidates = [];
@@ -762,8 +772,8 @@
                 const answerCandidatesListener = answerCandidates.onSnapshot(snapshot => {
                     snapshot.docChanges().forEach(async change => {
                         if (change.type === 'added') {
-                            console.log('Received answer candidate:', change.doc.data());
                             const candidate = new RTCIceCandidate(change.doc.data());
+                            console.log('Received answer candidate:', candidate);
                             if (peerConnection.currentRemoteDescription) {
                                 await peerConnection.addIceCandidate(candidate).catch(error => {
                                     console.error('Error adding ICE candidate:', error);
@@ -810,7 +820,7 @@
             }
             isCallActive = true;
 
-            console.log('Accepting call, ensuring media stream is initialized');
+            console.log('Accepting call');
             const mediaSuccess = await initMediaStream();
             if (!mediaSuccess) {
                 incomingCallAlert.style.display = 'none';
@@ -876,10 +886,9 @@
                         await retryFirestoreOperation(() => callDoc.update({ answer }));
                         console.log('Answer sent to call document:', answer);
 
-                        // Apply any pending ICE candidates
                         for (const candidate of pendingIceCandidates) {
                             await peerConnection.addIceCandidate(candidate).catch(error => {
-                                console.error('Error applying pending ICE candidate:', error);
+                                console.error('Error applying ICE candidate:', error);
                             });
                         }
                         pendingIceCandidates = [];
@@ -903,8 +912,8 @@
                 const offerCandidatesListener = offerCandidates.onSnapshot(snapshot => {
                     snapshot.docChanges().forEach(async change => {
                         if (change.type === 'added') {
-                            console.log('Received offer candidate:', change.doc.data());
                             const candidate = new RTCIceCandidate(change.doc.data());
+                            console.log('Received offer candidate:', candidate);
                             if (peerConnection.currentRemoteDescription) {
                                 await peerConnection.addIceCandidate(candidate).catch(error => {
                                     console.error('Error adding ICE candidate:', error);
@@ -976,12 +985,19 @@
             isCallActive = false;
 
             if (peerConnection) {
-                peerConnection.close();
+                try {
+                    peerConnection.close();
+                } catch (e) {
+                    console.error('Error closing peerConnection:', e);
+                }
                 peerConnection = null;
                 console.log('PeerConnection closed');
             }
             if (remoteStream) {
-                remoteStream.getTracks().forEach(track => track.stop());
+                remoteStream.getTracks().forEach(track => {
+                    track.stop();
+                    console.log('Stopped remote track:', track.kind);
+                });
                 remoteStream = null;
                 console.log('Remote stream stopped');
             }
@@ -1026,7 +1042,6 @@
                     );
                 }
 
-                // Clean up call document and collections
                 if (callDoc) {
                     const offerCandidates = callDoc.collection('offerCandidates');
                     const answerCandidates = callDoc.collection('answerCandidates');
@@ -1052,13 +1067,11 @@
         }
 
         async function createPeerConnection() {
-            if (!localStream || !localStream.active) {
-                console.log('Local stream not available or inactive, initializing...');
-                const mediaSuccess = await initMediaStream();
-                if (!mediaSuccess || !localStream) {
-                    callStatus.textContent = 'Cannot start call: Camera/microphone not available';
-                    throw new Error('Failed to initialize media stream');
-                }
+            console.log('Creating peerConnection');
+            const mediaSuccess = await initMediaStream();
+            if (!mediaSuccess || !localStream || !localStream.active) {
+                callStatus.textContent = 'Cannot start call: Camera/microphone not available';
+                throw new Error('Failed to initialize media stream');
             }
 
             const configuration = {
@@ -1076,7 +1089,8 @@
                         username: 'efLAXE6876DKJ13QAR',
                         credential: 'Y8jbmsIFdQ8DxM0a'
                     }
-                ]
+                ],
+                iceTransportPolicy: 'all'
             };
 
             peerConnection = new RTCPeerConnection(configuration);
@@ -1085,17 +1099,25 @@
             remotePlaceholder.style.display = 'none';
             remoteVideo.style.display = 'block';
 
+            console.log('Local stream tracks before adding:', localStream.getTracks().map(t => ({
+                kind: t.kind,
+                enabled: t.enabled,
+                readyState: t.readyState
+            })));
             localStream.getTracks().forEach(track => {
                 peerConnection.addTrack(track, localStream);
-                console.log('Added track to peerConnection:', track, 'Kind:', track.kind, 'Enabled:', track.enabled);
+                console.log('Added track to peerConnection:', track.kind, 'Enabled:', track.enabled, 'ReadyState:', track.readyState);
             });
 
             peerConnection.ontrack = event => {
-                console.log('ontrack event:', event, 'Streams:', event.streams, 'Track:', event.track);
+                console.log('ontrack event:', {
+                    streams: event.streams.length,
+                    track: { kind: event.track.kind, enabled: event.track.enabled, readyState: event.track.readyState }
+                });
                 if (event.streams[0]) {
                     event.streams[0].getTracks().forEach(track => {
                         remoteStream.addTrack(track);
-                        console.log('Added remote track:', track, 'Type:', track.kind, 'Enabled:', track.enabled);
+                        console.log('Added remote track:', track.kind, 'Enabled:', track.enabled, 'ReadyState:', track.readyState);
                     });
                     remoteVideo.srcObject = remoteStream;
                     remotePlaceholder.style.display = 'none';
@@ -1133,6 +1155,25 @@
                     }
                 } else if (peerConnection.connectionState === 'connected') {
                     console.log('Peer connection established successfully');
+                    // Verify tracks after connection
+                    if (remoteStream.getTracks().length === 0) {
+                        console.warn('No remote tracks after connection, triggering renegotiation');
+                        if (isCaller) {
+                            const offer = await peerConnection.createOffer();
+                            await peerConnection.setLocalDescription(offer);
+                            await retryFirestoreOperation(() =>
+                                callDoc.update({
+                                    offer: {
+                                        sdp: offer.sdp,
+                                        type: offer.type,
+                                        caller: myCallId,
+                                        callee: targetCallId
+                                    }
+                                })
+                            );
+                            console.log('Renegotiation offer sent');
+                        }
+                    }
                 }
             };
 
@@ -1152,7 +1193,7 @@
             };
 
             peerConnection.onnegotiationneeded = async () => {
-                if (isCaller) {
+                if (isCaller && peerConnection.signalingState === 'stable') {
                     console.log('Negotiation needed, creating new offer');
                     try {
                         const offer = await peerConnection.createOffer();
@@ -1188,6 +1229,24 @@
                 document.getElementById('toggleCam').textContent = 
                     videoTrack.enabled ? 'Camera Off' : 'Camera On';
                 console.log('Camera toggled:', videoTrack.enabled ? 'On' : 'Off');
+                // Trigger renegotiation if in a call
+                if (peerConnection && peerConnection.connectionState === 'connected' && isCaller) {
+                    peerConnection.createOffer().then(offer => {
+                        peerConnection.setLocalDescription(offer);
+                        retryFirestoreOperation(() =>
+                            callDoc.update({
+                                offer: {
+                                    sdp: offer.sdp,
+                                    type: offer.type,
+                                    caller: myCallId,
+                                    callee: targetCallId
+                                }
+                            })
+                        );
+                    }).catch(error => {
+                        console.error('Error triggering renegotiation for camera toggle:', error);
+                    });
+                }
             }
         }
 
@@ -1203,6 +1262,24 @@
                 document.getElementById('toggleMic').textContent = 
                     audioTrack.enabled ? 'Mic Off' : 'Mic On';
                 console.log('Microphone toggled:', audioTrack.enabled ? 'On' : 'Off');
+                // Trigger renegotiation if in a call
+                if (peerConnection && peerConnection.connectionState === 'connected' && isCaller) {
+                    peerConnection.createOffer().then(offer => {
+                        peerConnection.setLocalDescription(offer);
+                        retryFirestoreOperation(() =>
+                            callDoc.update({
+                                offer: {
+                                    sdp: offer.sdp,
+                                    type: offer.type,
+                                    caller: myCallId,
+                                    callee: targetCallId
+                                }
+                            })
+                        );
+                    }).catch(error => {
+                        console.error('Error triggering renegotiation for mic toggle:', error);
+                    });
+                }
             }
         }
 
