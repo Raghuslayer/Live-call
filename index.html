@@ -276,14 +276,14 @@
     <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
 
     <script>
- const firebaseConfig = {
-  apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
-  authDomain: "live-call-33ea7.firebaseapp.com",
-  projectId: "live-call-33ea7",
-  storageBucket: "live-call-33ea7.firebasestorage.app",
-  messagingSenderId: "518167322129",
-  appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
-};
+        const firebaseConfig = {
+            apiKey: "AIzaSyAyBQ5XefqnuXOj6tdYlFiied5sVFoOE40",
+            authDomain: "live-call-33ea7.firebaseapp.com",
+            projectId: "live-call-33ea7",
+            storageBucket: "live-call-33ea7.firebasestorage.app",
+            messagingSenderId: "518167322129",
+            appId: "1:518167322129:web:caf131eb4c4bec2272dbb0"
+        };
 
         firebase.initializeApp(firebaseConfig);
         const auth = firebase.auth();
@@ -429,6 +429,7 @@
             remotePlaceholder.style.display = 'block';
             remoteVideo.style.display = 'none';
             endCallBtn.style.display = 'none';
+            incomingCallAlert.style.display = 'none';
             targetCallId = null;
             callerCallId = null;
             isCaller = false;
@@ -436,6 +437,7 @@
             callListeners.forEach(unsubscribe => unsubscribe());
             callListeners = [];
             mediaInitialized = false;
+            callStatus.textContent = '';
         }
 
         async function initCallSection() {
@@ -450,8 +452,10 @@
 
                 const callListener = db.collection('users').doc(auth.currentUser.uid).collection('calls').onSnapshot(snapshot => {
                     snapshot.docChanges().forEach(change => {
-                        if (change.type === 'added') {
-                            handleIncomingCall(change.doc.data());
+                        if (change.type === 'added' || change.type === 'modified') {
+                            const callData = change.doc.data();
+                            console.log('Received call update:', callData);
+                            handleIncomingCall(callData, change.doc.id);
                         }
                     });
                 });
@@ -475,16 +479,21 @@
             }
         }
 
-        function handleIncomingCall(callData) {
-            if (callData.status === 'calling') {
+        function handleIncomingCall(callData, callDocId) {
+            console.log('Handling incoming call:', callData, 'Doc ID:', callDocId);
+            if (callData.status === 'calling' && !incomingCallAlert.style.display === 'block') {
                 callerCallId = callData.caller;
                 callerIdSpan.textContent = callerCallId;
                 incomingCallAlert.style.display = 'block';
                 callStatus.textContent = `Incoming call from ${callerCallId}`;
-            } else if (callData.status === 'ended') {
-                if (incomingCallAlert.style.display === 'block') {
-                    incomingCallAlert.style.display = 'none';
-                    callStatus.textContent = 'Call ended by the other party';
+                // Store callDocId for use in accept/reject
+                incomingCallAlert.dataset.callDocId = callDocId;
+            } else if (callData.status !== 'calling') {
+                incomingCallAlert.style.display = 'none';
+                callStatus.textContent = callData.status === 'ended' ? 'Call ended by the other party' : 
+                                        callData.status === 'rejected' ? 'Call was rejected' : 
+                                        callData.status === 'answered' ? 'Call connected' : '';
+                if (callStatus.textContent) {
                     setTimeout(() => callStatus.textContent = '', 3000);
                 }
             }
@@ -553,6 +562,7 @@
 
                 const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
                     const data = snapshot.data();
+                    console.log('Call snapshot update:', data);
                     if (!peerConnection.currentRemoteDescription && data?.answer) {
                         const answerDescription = new RTCSessionDescription(data.answer);
                         await peerConnection.setRemoteDescription(answerDescription);
@@ -565,6 +575,7 @@
                 const answerCandidatesListener = answerCandidates.onSnapshot(snapshot => {
                     snapshot.docChanges().forEach(async change => {
                         if (change.type === 'added') {
+                            console.log('Received answer candidate:', change.doc.data());
                             const candidate = new RTCIceCandidate(change.doc.data());
                             await peerConnection.addIceCandidate(candidate);
                         }
@@ -574,6 +585,7 @@
 
                 peerConnection.onicecandidate = async event => {
                     if (event.candidate) {
+                        console.log('Sending ICE candidate:', event.candidate);
                         await offerCandidates.add(event.candidate.toJSON());
                     }
                 };
@@ -599,30 +611,43 @@
                 await createPeerConnection();
 
                 const user = auth.currentUser;
-                const callQuery = await db.collection('users').doc(user.uid).collection('calls')
-                    .where('caller', '==', callerCallId)
-                    .where('status', '==', 'calling')
-                    .get();
+                const callDocId = incomingCallAlert.dataset.callDocId;
+                console.log('Attempting to accept call with doc ID:', callDocId);
 
-                if (callQuery.empty) {
+                // Query for the call document
+                const callDocRef = db.collection('users').doc(user.uid).collection('calls').doc(callDocId);
+                const callDocSnap = await callDocRef.get();
+
+                if (!callDocSnap.exists) {
+                    console.error('Call document not found:', callDocId);
                     callStatus.textContent = 'Call no longer exists';
                     return;
                 }
 
-                const callData = callQuery.docs[0].data();
+                const callData = callDocSnap.data();
+                console.log('Call data retrieved:', callData);
+
                 callDoc = db.collection('calls').doc(callData.callId);
                 const offerCandidates = callDoc.collection('offerCandidates');
                 const answerCandidates = callDoc.collection('answerCandidates');
 
-                await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).update({
-                    status: 'answered'
+                // Mark the call as answered
+                await callDocRef.update({
+                    status: 'answered',
+                    answeredAt: firebase.firestore.FieldValue.serverTimestamp()
                 });
+                console.log('Call marked as answered in user’s calls collection');
+
+                // Wait briefly to ensure Firestore sync
+                await new Promise(resolve => setTimeout(resolve, 500));
 
                 const callSnapshotListener = callDoc.onSnapshot(async snapshot => {
                     const data = snapshot.data();
+                    console.log('Call document snapshot:', data);
                     if (!peerConnection.currentRemoteDescription && data?.offer) {
-                        const offerDescription = data.offer;
-                        await peerConnection.setRemoteDescription(new RTCSessionDescription(offerDescription));
+                        console.log('Processing offer SDP:', data.offer);
+                        const offerDescription = new RTCSessionDescription(data.offer);
+                        await peerConnection.setRemoteDescription(offerDescription);
 
                         const answerDescription = await peerConnection.createAnswer();
                         await peerConnection.setLocalDescription(answerDescription);
@@ -633,9 +658,17 @@
                         };
 
                         await callDoc.update({ answer });
+                        console.log('Answer sent to call document:', answer);
 
                         callStatus.textContent = `Connected with ${callerCallId}`;
                         endCallBtn.style.display = 'block';
+
+                        // Clean up the call notification
+                        await callDocRef.update({
+                            status: 'completed',
+                            completedAt: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                        console.log('Call notification marked as completed');
                     }
                 });
                 callListeners.push(callSnapshotListener);
@@ -643,7 +676,9 @@
                 const offerCandidatesListener = offerCandidates.onSnapshot(snapshot => {
                     snapshot.docChanges().forEach(async change => {
                         if (change.type === 'added') {
-                            await peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+                            console.log('Received offer candidate:', change.doc.data());
+                            const candidate = new RTCIceCandidate(change.doc.data());
+                            await peerConnection.addIceCandidate(candidate);
                         }
                     });
                 });
@@ -651,6 +686,7 @@
 
                 peerConnection.onicecandidate = async event => {
                     if (event.candidate) {
+                        console.log('Sending answer ICE candidate:', event.candidate);
                         await answerCandidates.add(event.candidate.toJSON());
                     }
                 };
@@ -667,18 +703,31 @@
 
             try {
                 const user = auth.currentUser;
-                const callQuery = await db.collection('users').doc(user.uid).collection('calls')
-                    .where('caller', '==', callerCallId)
-                    .where('status', '==', 'calling')
-                    .get();
+                const callDocId = incomingCallAlert.dataset.callDocId;
+                console.log('Rejecting call with doc ID:', callDocId);
 
-                if (!callQuery.empty) {
-                    await db.collection('users').doc(user.uid).collection('calls').doc(callQuery.docs[0].id).update({
-                        status: 'rejected'
-                    });
+                const callDocRef = db.collection('users').doc(user.uid).collection('calls').doc(callDocId);
+                await callDocRef.update({
+                    status: 'rejected',
+                    rejectedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                console.log('Call marked as rejected');
+
+                // Notify caller
+                if (callerCallId && callDoc) {
+                    const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
+                    if (callerCallIdDoc.exists) {
+                        const callerUid = callerCallIdDoc.data().uid;
+                        await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).update({
+                            status: 'rejected',
+                            rejectedAt: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                        console.log('Caller notified of rejection');
+                    }
                 }
             } catch (error) {
                 console.error('Error rejecting call:', error);
+                callStatus.textContent = 'Error rejecting call: ' + error.message;
             }
         }
 
@@ -695,20 +744,37 @@
                     if (targetCallIdDoc.exists) {
                         const targetUid = targetCallIdDoc.data().uid;
                         await db.collection('users').doc(targetUid).collection('calls').doc(callDoc.id).update({
-                            status: 'ended'
+                            status: 'ended',
+                            endedAt: firebase.firestore.FieldValue.serverTimestamp()
                         });
+                        console.log('Target user notified of call end');
                     }
+                    // Clean up caller’s call document
+                    await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).update({
+                        status: 'ended',
+                        endedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    console.log('Caller’s call document marked as ended');
                 } else if (callerCallId && callDoc) {
                     const callerCallIdDoc = await db.collection('callIds').doc(callerCallId).get();
                     if (callerCallIdDoc.exists) {
                         const callerUid = callerCallIdDoc.data().uid;
                         await db.collection('users').doc(callerUid).collection('calls').doc(callDoc.id).update({
-                            status: 'ended'
+                            status: 'ended',
+                            endedAt: firebase.firestore.FieldValue.serverTimestamp()
                         });
+                        console.log('Caller notified of call end');
                     }
+                    // Clean up callee’s call document
+                    await db.collection('users').doc(user.uid).collection('calls').doc(callDoc.id).update({
+                        status: 'ended',
+                        endedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    console.log('Callee’s call document marked as ended');
                 }
             } catch (error) {
                 console.error('Error ending call:', error);
+                callStatus.textContent = 'Error ending call: ' + error.message;
             }
 
             resetCallState();
@@ -746,6 +812,7 @@
                     event.streams[0].getTracks().forEach(track => {
                         remoteStream.addTrack(track);
                     });
+                    console.log('Remote stream tracks added:', remoteStream.getTracks());
                 }
             };
 
