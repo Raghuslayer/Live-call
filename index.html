@@ -252,7 +252,7 @@
                 <div id="localPlaceholder" class="placeholder">Your camera will appear here</div>
             </div>
             <div class="video-box remote-video-box">
-                <video id="remoteVideo" autoplay></video>
+                <video id="remoteVideo" autoplay playsinline></video>
                 <div id="remotePlaceholder" class="placeholder">Waiting for connection...</div>
             </div>
         </div>
@@ -1056,6 +1056,11 @@
                         urls: 'turn:relay1.expressturn.com:3478',
                         username: 'efLAXE6876DKJ13QAR',
                         credential: 'Y8jbmsIFdQ8DxM0a'
+                    },
+                    {
+                        urls: 'turn:relay1.expressturn.com:443?transport=tcp',
+                        username: 'efLAXE6876DKJ13QAR',
+                        credential: 'Y8jbmsIFdQ8DxM0a'
                     }
                 ]
             };
@@ -1086,9 +1091,11 @@
                     console.log('Remote stream tracks:', { video: videoTracks.length, audio: audioTracks.length });
                     if (videoTracks.length === 0) {
                         callStatus.textContent = 'No remote video stream received';
+                        setTimeout(() => callStatus.textContent = '', 5000);
                     }
                     if (audioTracks.length === 0) {
                         callStatus.textContent = 'No remote audio stream received';
+                        setTimeout(() => callStatus.textContent = '', 5000);
                     }
                 }
             };
